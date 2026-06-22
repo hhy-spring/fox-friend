@@ -141,15 +141,17 @@ function createProfileCollector() {
  * 构建最终的画像数据结构（用于存储）
  * 参考PRD §4.1 步骤3 画像数据结构
  * 参考Issue #3：新增 interests_derived_from_fox_name 字段（兴趣关键词从狐狸名字中提取）
+ * 参考Issue #4：新增 teaching_willingness 字段（费曼学习法首次触发 - 孩子是否愿意教小狐狸认字）
  *
  * @param {object} collectedData - 采集器返回的原始数据
  * @param {string} foxName - 狐狸名字
  * @param {string} foxNameSource - 名字来源（child_choice | fox_suggestion）
  * @param {number} proactiveSpeechCount - 主动发言次数
  * @param {string[]} [interestsDerivedFromFoxName] - 从狐狸名字提取的兴趣关键词（Issue #3）
+ * @param {boolean|null} [teachingWillingness] - 孩子是否愿意教小狐狸认字（Issue #4 费曼学习法）
  * @returns {object} 完整画像数据
  */
-function buildProfile(collectedData, foxName, foxNameSource, proactiveSpeechCount, interestsDerivedFromFoxName = []) {
+function buildProfile(collectedData, foxName, foxNameSource, proactiveSpeechCount, interestsDerivedFromFoxName = [], teachingWillingness = null) {
   return {
     nickname: collectedData.nickname,
     age: collectedData.age,
@@ -159,7 +161,8 @@ function buildProfile(collectedData, foxName, foxNameSource, proactiveSpeechCoun
     fox_name_source: foxNameSource,
     interests_derived_from_fox_name: interestsDerivedFromFoxName,
     first_meeting_reactions: {
-      proactive_speech_count: proactiveSpeechCount
+      proactive_speech_count: proactiveSpeechCount,
+      teaching_willingness: teachingWillingness
     }
   };
 }

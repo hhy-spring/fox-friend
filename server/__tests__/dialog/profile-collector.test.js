@@ -207,7 +207,8 @@ describe('画像采集器 - 4步画像信息采集', () => {
         fox_name_source: 'child_choice',
         interests_derived_from_fox_name: [],
         first_meeting_reactions: {
-          proactive_speech_count: 5
+          proactive_speech_count: 5,
+          teaching_willingness: null
         }
       });
     });
@@ -258,6 +259,39 @@ describe('画像采集器 - 4步画像信息采集', () => {
       };
       const profile = buildProfile(collectedData, '闪电', 'child_choice', 8);
       expect(profile.first_meeting_reactions.proactive_speech_count).toBe(8);
+    });
+
+    test('传入 teachingWillingness=true 时，first_meeting_reactions.teaching_willingness 应为 true（Issue #4 费曼学习法）', () => {
+      const collectedData = {
+        nickname: '闪电',
+        age: 6,
+        interests: ['恐龙'],
+        selfClaimedSkills: ['跑步快']
+      };
+      const profile = buildProfile(collectedData, '闪电', 'child_choice', 5, [], true);
+      expect(profile.first_meeting_reactions.teaching_willingness).toBe(true);
+    });
+
+    test('不传 teachingWillingness 时，first_meeting_reactions.teaching_willingness 默认为 null（向后兼容）', () => {
+      const collectedData = {
+        nickname: '闪电',
+        age: 6,
+        interests: ['恐龙'],
+        selfClaimedSkills: ['跑步快']
+      };
+      const profile = buildProfile(collectedData, '闪电', 'child_choice', 5);
+      expect(profile.first_meeting_reactions.teaching_willingness).toBeNull();
+    });
+
+    test('传入 teachingWillingness=false 时，first_meeting_reactions.teaching_willingness 应为 false（孩子不愿意教小狐狸）', () => {
+      const collectedData = {
+        nickname: '闪电',
+        age: 6,
+        interests: ['恐龙'],
+        selfClaimedSkills: ['跑步快']
+      };
+      const profile = buildProfile(collectedData, '闪电', 'child_choice', 5, [], false);
+      expect(profile.first_meeting_reactions.teaching_willingness).toBe(false);
     });
   });
 

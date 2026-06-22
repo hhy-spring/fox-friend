@@ -24,6 +24,8 @@ const { createSessionContext } = require('./session-context');
 const { getStep3Dialog } = require('./step3-templates');
 const { getStep4Dialog } = require('./step4-templates');
 const { getStep5Dialog } = require('./step5-templates');
+const { createFeynmanOrchestrator } = require('./feynman-orchestrator');
+const { buildProfile } = require('./profile-collector');
 
 /**
  * 创建台词分型引擎实例（集成入口）
@@ -79,6 +81,16 @@ function createDialogueBrancher(foxName, childId) {
     },
 
     /**
+     * 获取步骤4费曼学习法流程编排器（Issue #4）
+     * 返回独立的编排器实例，管理费曼学习法的完整流程：
+     *   TRIGGER → AWAIT_RESPONSE → FEEDBACK → COMPLETE
+     * @returns {object} 费曼编排器实例
+     */
+    getStep4Flow() {
+      return createFeynmanOrchestrator(interestType, foxName);
+    },
+
+    /**
      * 获取步骤5台词（搭档确认）
      * @param {string} [childResponse] - 孩子反应：'accept' | 'hesitate' | 'refuse'（可选）
      * @returns {object} 邀请台词或回应台词
@@ -108,26 +120,21 @@ function createDialogueBrancher(foxName, childId) {
 
     /**
      * 构建包含兴趣分型字段的完整画像
-     * 整合 profile-collector 的 buildProfile 与 interests_derived_from_fox_name
+     * 委托 profile-collector.buildProfile 构建画像，自动填充 interests_derived_from_fox_name
+     * Issue #4：新增 teachingWillingness 参数，写入 first_meeting_reactions
      * @param {object} collectedData - 采集器返回的原始数据
      * @param {string} foxName - 狐狸名字
      * @param {string} foxNameSource - 名字来源
      * @param {number} proactiveSpeechCount - 主动发言次数
-     * @returns {object} 完整画像数据（含 interests_derived_from_fox_name）
+     * @param {string[]} [interestsDerivedFromFoxName] - 兴趣关键词数组（可选，默认使用会话上下文）
+     * @param {boolean|null} [teachingWillingness] - 费曼学习法教学意愿（Issue #4）
+     * @returns {object} 完整画像数据（含 interests_derived_from_fox_name 和 teaching_willingness）
      */
-    buildProfileWithInterest(collectedData, foxName, foxNameSource, proactiveSpeechCount) {
-      return {
-        nickname: collectedData.nickname,
-        age: collectedData.age,
-        interests: collectedData.interests,
-        self_claimed_skills: collectedData.selfClaimedSkills,
-        fox_name: foxName,
-        fox_name_source: foxNameSource,
-        interests_derived_from_fox_name: sessionContext.getInterestsDerivedFromFoxName(),
-        first_meeting_reactions: {
-          proactive_speech_count: proactiveSpeechCount
-        }
-      };
+    buildProfileWithInterest(collectedData, foxName, foxNameSource, proactiveSpeechCount, interestsDerivedFromFoxName, teachingWillingness = null) {
+      const interests = interestsDerivedFromFoxName !== undefined
+        ? interestsDerivedFromFoxName
+        : sessionContext.getInterestsDerivedFromFoxName();
+      return buildProfile(collectedData, foxName, foxNameSource, proactiveSpeechCount, interests, teachingWillingness);
     }
   };
 }

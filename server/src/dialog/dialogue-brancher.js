@@ -25,6 +25,9 @@ const { getStep3Dialog } = require('./step3-templates');
 const { getStep4Dialog } = require('./step4-templates');
 const { getStep5Dialog } = require('./step5-templates');
 const { createFeynmanOrchestrator } = require('./feynman-orchestrator');
+const { createPartnerOrchestrator } = require('./partner-orchestrator');
+const { saveProfile, validateProfile } = require('./profile-persistence');
+const { createFirstMeetingFlow } = require('./first-meeting-flow');
 const { buildProfile } = require('./profile-collector');
 
 /**
@@ -103,6 +106,25 @@ function createDialogueBrancher(foxName, childId) {
     },
 
     /**
+     * 获取步骤5搭档确认流程编排器（Issue #5）
+     * 返回独立的编排器实例，管理搭档确认的完整流程：
+     *   INVITE → AWAIT_RESPONSE → CONFIRMED / DECLINED
+     * @returns {object} 搭档确认编排器实例
+     */
+    getStep5Flow() {
+      return createPartnerOrchestrator(interestType, foxName);
+    },
+
+    /**
+     * 获取第一次见面全流程管理器（Issue #5）
+     * 管理步骤1-5的完整流程，包括计时预算（5-8分钟）和次日提醒
+     * @returns {object} 第一次见面流程管理器实例
+     */
+    getFirstMeetingFlow() {
+      return createFirstMeetingFlow(childId, foxName);
+    },
+
+    /**
      * 获取会话上下文实例
      * @returns {object} 会话上下文
      */
@@ -122,19 +144,42 @@ function createDialogueBrancher(foxName, childId) {
      * 构建包含兴趣分型字段的完整画像
      * 委托 profile-collector.buildProfile 构建画像，自动填充 interests_derived_from_fox_name
      * Issue #4：新增 teachingWillingness 参数，写入 first_meeting_reactions
+     * Issue #5：新增 partnerAcceptance 参数，写入 first_meeting_reactions
      * @param {object} collectedData - 采集器返回的原始数据
      * @param {string} foxName - 狐狸名字
      * @param {string} foxNameSource - 名字来源
      * @param {number} proactiveSpeechCount - 主动发言次数
      * @param {string[]} [interestsDerivedFromFoxName] - 兴趣关键词数组（可选，默认使用会话上下文）
      * @param {boolean|null} [teachingWillingness] - 费曼学习法教学意愿（Issue #4）
-     * @returns {object} 完整画像数据（含 interests_derived_from_fox_name 和 teaching_willingness）
+     * @param {boolean|null} [partnerAcceptance] - 搭档确认意愿（Issue #5）
+     * @returns {object} 完整画像数据（含 interests_derived_from_fox_name、teaching_willingness、partner_acceptance）
      */
-    buildProfileWithInterest(collectedData, foxName, foxNameSource, proactiveSpeechCount, interestsDerivedFromFoxName, teachingWillingness = null) {
+    buildProfileWithInterest(collectedData, foxName, foxNameSource, proactiveSpeechCount, interestsDerivedFromFoxName, teachingWillingness = null, partnerAcceptance = null) {
       const interests = interestsDerivedFromFoxName !== undefined
         ? interestsDerivedFromFoxName
         : sessionContext.getInterestsDerivedFromFoxName();
-      return buildProfile(collectedData, foxName, foxNameSource, proactiveSpeechCount, interests, teachingWillingness);
+      return buildProfile(collectedData, foxName, foxNameSource, proactiveSpeechCount, interests, teachingWillingness, partnerAcceptance);
+    },
+
+    /**
+     * 构建并保存完整的第一次见面画像（Issue #5 集成方法）
+     * 整合所有步骤的数据，构建画像并写入文件存储
+     * @param {object} collectedData - 采集器返回的原始画像数据
+     * @param {string} foxNameSource - 名字来源
+     * @param {number} proactiveSpeechCount - 主动发言次数
+     * @param {boolean|null} teachingWillingness - 费曼学习法教学意愿
+     * @param {boolean|null} partnerAcceptance - 搭档确认意愿
+     * @param {object} [options] - 存储选项 { storageDir?: string }
+     * @returns {{ profile: object, saveResult: object, validation: object }}
+     */
+    buildCompleteProfile(collectedData, foxNameSource, proactiveSpeechCount, teachingWillingness, partnerAcceptance, options) {
+      const profile = this.buildProfileWithInterest(
+        collectedData, foxName, foxNameSource, proactiveSpeechCount,
+        undefined, teachingWillingness, partnerAcceptance
+      );
+      const validation = validateProfile(profile);
+      const saveResult = saveProfile(profile, childId, options);
+      return { profile, saveResult, validation };
     }
   };
 }

@@ -4,6 +4,10 @@ const {
 const { INTEREST_TYPES } = require('../../src/dialog/interest-classifier');
 const { STEP3_SUB_STATES } = require('../../src/dialog/step3-templates');
 const { STATES: FEYNMAN_STATES } = require('../../src/dialog/feynman-orchestrator');
+const { STATES: PARTNER_STATES } = require('../../src/dialog/partner-orchestrator');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
 describe('台词分型引擎集成模块 - Issue #3 dialogue-brancher', () => {
   describe('createDialogueBrancher - 基础功能', () => {
@@ -392,6 +396,243 @@ describe('台词分型引擎集成模块 - Issue #3 dialogue-brancher', () => {
 
       const partner = brancher.getStep5Dialog();
       expect(partner.mainLine).toContain('小伙伴');
+    });
+  });
+
+  // ===== Issue #5 集成测试 =====
+
+  describe('getStep5Flow - Issue #5 搭档确认编排器', () => {
+    test('返回搭档确认编排器实例，初始状态为 INVITE', () => {
+      const brancher = createDialogueBrancher('恐龙蛋', 'child_001');
+      const flow = brancher.getStep5Flow();
+      expect(flow.getState()).toBe(PARTNER_STATES.INVITE);
+      expect(flow).toHaveProperty('getInvitationDialog');
+      expect(flow).toHaveProperty('processChildResponse');
+      expect(flow).toHaveProperty('getPartnerAcceptance');
+      expect(flow).toHaveProperty('isComplete');
+    });
+
+    test('编排器获取邀请台词后状态转为 AWAIT_RESPONSE', () => {
+      const brancher = createDialogueBrancher('恐龙蛋', 'child_001');
+      const flow = brancher.getStep5Flow();
+      const dialog = flow.getInvitationDialog();
+      expect(dialog.mainLine).toContain('恐龙搭档');
+      expect(flow.getState()).toBe(PARTNER_STATES.AWAIT_RESPONSE);
+    });
+
+    test('编排器处理 accept 反应 → CONFIRMED, partnerAcceptance=true', () => {
+      const brancher = createDialogueBrancher('恐龙蛋', 'child_001');
+      const flow = brancher.getStep5Flow();
+      flow.getInvitationDialog();
+      const result = flow.processChildResponse('我愿意');
+      expect(result.partnerAcceptance).toBe(true);
+      expect(flow.getPartnerAcceptance()).toBe(true);
+      expect(flow.getState()).toBe(PARTNER_STATES.CONFIRMED);
+      expect(flow.isComplete()).toBe(true);
+    });
+  });
+
+  describe('getFirstMeetingFlow - Issue #5 全流程管理器', () => {
+    test('返回第一次见面流程管理器实例', () => {
+      const brancher = createDialogueBrancher('恐龙蛋', 'child_001');
+      const flow = brancher.getFirstMeetingFlow();
+      expect(flow.getCurrentStep()).toBe(1);
+      expect(flow.getState()).toBe('IN_PROGRESS');
+      expect(flow.isComplete()).toBe(false);
+    });
+
+    test('流程管理器可推进到步骤5并完成', () => {
+      const brancher = createDialogueBrancher('恐龙蛋', 'child_001');
+      const flow = brancher.getFirstMeetingFlow();
+      flow.advanceToNext(); // → 2
+      flow.advanceToNext(); // → 3
+      flow.advanceToNext(); // → 4
+      flow.advanceToNext(); // → 5
+      expect(flow.getCurrentStep()).toBe(5);
+      flow.complete();
+      expect(flow.isComplete()).toBe(true);
+      expect(flow.getState()).toBe('COMPLETED');
+    });
+  });
+
+  describe('buildProfileWithInterest - Issue #5 partner_acceptance 支持', () => {
+    test('传入 partnerAcceptance=true 时写入 first_meeting_reactions', () => {
+      const brancher = createDialogueBrancher('恐龙蛋', 'child_001');
+      const collectedData = {
+        nickname: '小明',
+        age: 5,
+        interests: ['恐龙'],
+        selfClaimedSkills: '跑得快'
+      };
+      const profile = brancher.buildProfileWithInterest(
+        collectedData, '恐龙蛋', 'child_choice', 3, [], true, true
+      );
+      expect(profile.first_meeting_reactions.partner_acceptance).toBe(true);
+      expect(profile.first_meeting_reactions.teaching_willingness).toBe(true);
+    });
+
+    test('传入 partnerAcceptance=false 时写入 first_meeting_reactions', () => {
+      const brancher = createDialogueBrancher('恐龙蛋', 'child_001');
+      const collectedData = {
+        nickname: '小明',
+        age: 5,
+        interests: ['恐龙'],
+        selfClaimedSkills: '跑得快'
+      };
+      const profile = brancher.buildProfileWithInterest(
+        collectedData, '恐龙蛋', 'child_choice', 3, [], null, false
+      );
+      expect(profile.first_meeting_reactions.partner_acceptance).toBe(false);
+    });
+
+    test('不传 partnerAcceptance 时默认为 null（向后兼容）', () => {
+      const brancher = createDialogueBrancher('恐龙蛋', 'child_001');
+      const collectedData = {
+        nickname: '小明',
+        age: 5,
+        interests: ['恐龙'],
+        selfClaimedSkills: '跑得快'
+      };
+      const profile = brancher.buildProfileWithInterest(
+        collectedData, '恐龙蛋', 'child_choice', 3
+      );
+      expect(profile.first_meeting_reactions.partner_acceptance).toBeNull();
+    });
+
+    test('first_meeting_reactions 包含全部三个字段', () => {
+      const brancher = createDialogueBrancher('恐龙蛋', 'child_001');
+      const collectedData = {
+        nickname: '小明',
+        age: 5,
+        interests: ['恐龙'],
+        selfClaimedSkills: '跑得快'
+      };
+      const profile = brancher.buildProfileWithInterest(
+        collectedData, '恐龙蛋', 'child_choice', 3, [], true, true
+      );
+      expect(Object.keys(profile.first_meeting_reactions)).toEqual(
+        expect.arrayContaining([
+          'proactive_speech_count',
+          'teaching_willingness',
+          'partner_acceptance'
+        ])
+      );
+    });
+  });
+
+  describe('buildCompleteProfile - Issue #5 画像落库集成', () => {
+    let tmpDir;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fox-friend-test-'));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('构建并保存完整画像，返回 profile + saveResult + validation', () => {
+      const brancher = createDialogueBrancher('恐龙蛋', 'child_save_001');
+      const collectedData = {
+        nickname: '小明',
+        age: 5,
+        interests: '恐龙',
+        selfClaimedSkills: '跑得快'
+      };
+      const result = brancher.buildCompleteProfile(
+        collectedData, 'child_choice', 3, true, true, { storageDir: tmpDir }
+      );
+      expect(result.profile.fox_name).toBe('恐龙蛋');
+      expect(result.profile.first_meeting_reactions.partner_acceptance).toBe(true);
+      expect(result.saveResult.success).toBe(true);
+      expect(result.validation.meetsMvpStandard).toBe(true);
+      expect(fs.existsSync(result.saveResult.path)).toBe(true);
+    });
+
+    test('保存的画像文件包含 saved_at 时间戳', () => {
+      const brancher = createDialogueBrancher('闪电', 'child_save_002');
+      const collectedData = {
+        nickname: '小红',
+        age: 4,
+        interests: '赛车',
+        selfClaimedSkills: null
+      };
+      const result = brancher.buildCompleteProfile(
+        collectedData, 'child_choice', 2, true, false, { storageDir: tmpDir }
+      );
+      const saved = JSON.parse(fs.readFileSync(result.saveResult.path, 'utf-8'));
+      expect(saved).toHaveProperty('saved_at');
+      expect(saved.first_meeting_reactions.partner_acceptance).toBe(false);
+    });
+
+    test('画像数据不足3/4字段时 meetsMvpStandard=false', () => {
+      const brancher = createDialogueBrancher('小白', 'child_save_003');
+      const collectedData = {
+        nickname: '小刚',
+        age: null,
+        interests: null,
+        selfClaimedSkills: null
+      };
+      const result = brancher.buildCompleteProfile(
+        collectedData, 'child_choice', 1, null, null, { storageDir: tmpDir }
+      );
+      expect(result.validation.meetsMvpStandard).toBe(false);
+      expect(result.validation.completedFields).toBe(1);
+    });
+  });
+
+  describe('Issue #5 端到端流程验证', () => {
+    test('完整第一次见面流程：步骤1-5 + 画像落库 + 次日提醒', () => {
+      const brancher = createDialogueBrancher('恐龙蛋', 'child_e2e_5');
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fox-friend-e2e-'));
+
+      try {
+        // 1. 获取全流程管理器
+        const meetingFlow = brancher.getFirstMeetingFlow();
+        meetingFlow.start();
+
+        // 2. 推进步骤 1→2→3→4→5
+        meetingFlow.advanceToNext(); // 2
+        meetingFlow.advanceToNext(); // 3
+        meetingFlow.advanceToNext(); // 4
+
+        // 3. 步骤4 费曼学习法
+        const feynmanFlow = brancher.getStep4Flow();
+        feynmanFlow.getTriggerDialog();
+        const feynmanResult = feynmanFlow.processChildResponse('龙');
+        expect(feynmanResult.teachingWillingness).toBe(true);
+
+        // 4. 步骤5 搭档确认
+        meetingFlow.advanceToNext(); // 5
+        const partnerFlow = brancher.getStep5Flow();
+        partnerFlow.getInvitationDialog();
+        const partnerResult = partnerFlow.processChildResponse('我愿意');
+        expect(partnerResult.partnerAcceptance).toBe(true);
+
+        // 5. 完成流程 + 次日提醒
+        meetingFlow.complete();
+        expect(meetingFlow.isComplete()).toBe(true);
+        expect(meetingFlow.getNextDayReminder().enabled).toBe(true);
+
+        // 6. 画像落库
+        const collectedData = {
+          nickname: '小明',
+          age: 5,
+          interests: '恐龙',
+          selfClaimedSkills: '跑得快'
+        };
+        const profileResult = brancher.buildCompleteProfile(
+          collectedData, 'child_choice', 3,
+          feynmanResult.teachingWillingness,
+          partnerResult.partnerAcceptance,
+          { storageDir: tmpDir }
+        );
+        expect(profileResult.saveResult.success).toBe(true);
+        expect(profileResult.validation.meetsMvpStandard).toBe(true);
+        expect(profileResult.profile.first_meeting_reactions.partner_acceptance).toBe(true);
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
     });
   });
 });

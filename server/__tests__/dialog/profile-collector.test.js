@@ -208,7 +208,8 @@ describe('画像采集器 - 4步画像信息采集', () => {
         interests_derived_from_fox_name: [],
         first_meeting_reactions: {
           proactive_speech_count: 5,
-          teaching_willingness: null
+          teaching_willingness: null,
+          partner_acceptance: null
         }
       });
     });

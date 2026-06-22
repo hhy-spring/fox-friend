@@ -142,6 +142,7 @@ function createProfileCollector() {
  * 参考PRD §4.1 步骤3 画像数据结构
  * 参考Issue #3：新增 interests_derived_from_fox_name 字段（兴趣关键词从狐狸名字中提取）
  * 参考Issue #4：新增 teaching_willingness 字段（费曼学习法首次触发 - 孩子是否愿意教小狐狸认字）
+ * 参考Issue #5：新增 partner_acceptance 字段（搭档确认 - 孩子是否愿意做小狐狸的搭档）
  *
  * @param {object} collectedData - 采集器返回的原始数据
  * @param {string} foxName - 狐狸名字
@@ -149,9 +150,10 @@ function createProfileCollector() {
  * @param {number} proactiveSpeechCount - 主动发言次数
  * @param {string[]} [interestsDerivedFromFoxName] - 从狐狸名字提取的兴趣关键词（Issue #3）
  * @param {boolean|null} [teachingWillingness] - 孩子是否愿意教小狐狸认字（Issue #4 费曼学习法）
+ * @param {boolean|null} [partnerAcceptance] - 孩子是否愿意做小狐狸的搭档（Issue #5 搭档确认）
  * @returns {object} 完整画像数据
  */
-function buildProfile(collectedData, foxName, foxNameSource, proactiveSpeechCount, interestsDerivedFromFoxName = [], teachingWillingness = null) {
+function buildProfile(collectedData, foxName, foxNameSource, proactiveSpeechCount, interestsDerivedFromFoxName = [], teachingWillingness = null, partnerAcceptance = null) {
   return {
     nickname: collectedData.nickname,
     age: collectedData.age,
@@ -162,7 +164,8 @@ function buildProfile(collectedData, foxName, foxNameSource, proactiveSpeechCoun
     interests_derived_from_fox_name: interestsDerivedFromFoxName,
     first_meeting_reactions: {
       proactive_speech_count: proactiveSpeechCount,
-      teaching_willingness: teachingWillingness
+      teaching_willingness: teachingWillingness,
+      partner_acceptance: partnerAcceptance
     }
   };
 }

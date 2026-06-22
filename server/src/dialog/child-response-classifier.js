@@ -16,6 +16,8 @@
  *   }
  */
 
+const { findMatchedKeyword } = require('./keyword-matcher');
+
 // 反应类型常量
 const RESPONSE_TYPES = {
   CORRECT: 'correct',
@@ -37,22 +39,6 @@ const UNSURE_KEYWORDS = [
 const REFUSE_KEYWORDS = [
   '不想教', '别让我', '不愿意', '不要', '不想'
 ];
-
-/**
- * 在文本中查找首个命中的关键词（按长度降序优先）
- * @param {string} text - 待检测文本
- * @param {string[]} keywords - 关键词列表
- * @returns {string|null}
- */
-function findMatchedKeyword(text, keywords) {
-  const sorted = [...keywords].sort((a, b) => b.length - a.length);
-  for (const kw of sorted) {
-    if (text.includes(kw)) {
-      return kw;
-    }
-  }
-  return null;
-}
 
 /**
  * 分类孩子的反应

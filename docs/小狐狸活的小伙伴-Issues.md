@@ -66,7 +66,7 @@ None — 可以立即开始
 
 ---
 
-## Issue #3：台词分型引擎
+## Issue #3：台词分型引擎 ✅ 已完成
 
 ### Parent
 
@@ -78,18 +78,77 @@ None — 可以立即开始
 
 ### Acceptance criteria
 
-- [ ] 名字→兴趣关键词提取（如「恐龙蛋」→恐龙，「艾莎」→公主/魔法，「闪电」→速度，「小白」→无法判断）
-- [ ] 步骤3 命名仪式台词：按兴趣分型输出（含对应的语气词和动作，如「嗷呜——」「叮——」「嗖——」）
-- [ ] 步骤3 画像采集台词：兴趣关键词自然嵌入追问（如「你还喜欢什么恐龙？」vs「你还喜欢什么？赛车？飞机？」）
-- [ ] 步骤4 费曼触发台词：分型适配（如恐龙线教「龙」字，速度线教「闪」字）
-- [ ] 步骤5 搭档确认台词：分型适配（如「恐龙搭档」「魔法搭档」「赛车搭档」）
-- [ ] 无法判断型 → 回退通用台词，兴趣在画像采集自然问到
-- [ ] 兴趣关键词写入 `child_profile.interests_derived_from_fox_name`
-- [ ] 分型结果存入 session context，供后续教学使用
+- [x] 名字→兴趣关键词提取（如「恐龙蛋」→恐龙，「艾莎」→公主/魔法，「闪电」→速度，「小白」→无法判断）
+- [x] 步骤3 命名仪式台词：按兴趣分型输出（含对应的语气词和动作，如「嗷呜——」「叮——」「嗖——」）
+- [x] 步骤3 画像采集台词：兴趣关键词自然嵌入追问（如「你还喜欢什么恐龙？」vs「你还喜欢什么？赛车？飞机？」）
+- [x] 步骤4 费曼触发台词：分型适配（如恐龙线教「龙」字，速度线教「闪」字）
+- [x] 步骤5 搭档确认台词：分型适配（如「恐龙搭档」「魔法搭档」「赛车搭档」）
+- [x] 无法判断型 → 回退通用台词，兴趣在画像采集自然问到
+- [x] 兴趣关键词写入 `child_profile.interests_derived_from_fox_name`
+- [x] 分型结果存入 session context，供后续教学使用
 
 ### Blocked by
 
 - Issue #2（依赖命名仪式完成后的名字和初步兴趣信号）
+
+### 实现进度报告
+
+**状态**：已完成并推送至 GitHub（commit `bdda0fd`）
+**完成日期**：2026-06-23
+**实现方式**：多 Agent 并行 TDD 开发（4 个并行 Agent + 1 个集成层）
+
+#### 技术架构（参考 `docs/技术架构执行摘要.md` §三 Interest Brancher）
+
+```
+interest-classifier → session-context → step3/4/5-templates → dialogue-brancher
+       (分类核心)        (会话上下文)        (分型台词模板)          (集成入口)
+```
+
+#### 新增模块（6 个源文件 + 6 个测试文件）
+
+| 模块 | 文件 | 职责 | 测试数 |
+|------|------|------|--------|
+| 兴趣分类器 | `interest-classifier.js` | 名字→兴趣关键词提取与分类 | 31 |
+| 步骤3模板 | `step3-templates.js` | 命名仪式崇拜回应 + 画像采集追问（含兴趣嵌入） | 23 |
+| 步骤4模板 | `step4-templates.js` | 费曼触发（兴趣特定生字）+ 3分支反馈 | 31 |
+| 步骤5模板 | `step5-templates.js` | 搭档确认（兴趣搭档标签）+ 3分支回应 | 27 |
+| 会话上下文 | `session-context.js` | 存储分型结果，生成 `interests_derived_from_fox_name` | 19 |
+| 集成入口 | `dialogue-brancher.js` | 统一 API，整合所有模块 | 27 |
+
+#### 更新模块
+
+- `profile-collector.js`：`buildProfile` 新增 `interests_derived_from_fox_name` 字段支持
+
+#### 兴趣分型映射
+
+| 分型 | 关键词示例 | 语气词 | 步骤4生字 | 搭档标签 |
+|------|-----------|--------|----------|---------|
+| dinosaur | 恐龙、霸王龙、三角龙、龙 | 嗷呜—— | 龙 | 恐龙搭档 |
+| princess | 艾莎、公主、魔法、莎 | 叮—— | 莎/魔 | 魔法搭档 |
+| speed | 闪电、赛车、火箭、闪 | 嗖—— | 闪 | 赛车搭档 |
+| generic | 其他（小白、豆豆等） | （无） | null | 小伙伴 |
+
+#### 多 Agent 执行机制
+
+1. **Phase 1（串行）**：构建 `interest-classifier.js` 基础模块，定义接口契约
+2. **Phase 2（4 Agent 并行）**：各 Agent 独立构建 Step3/Step4/Step5/SessionContext 模块，均使用严格 TDD（垂直切片：一个测试→一个实现→循环）
+3. **Phase 3（串行）**：构建 `dialogue-brancher.js` 集成层，整合所有模块
+4. **Phase 4**：全量测试验证
+
+#### 测试结果
+
+- **新增测试**：119 个（Issue #3 专属）
+- **全量测试**：364 个通过，18 个测试套件全部绿色
+- **验收标准**：8/8 全部通过
+
+#### 关键文件链接
+
+- [interest-classifier.js](file:///d:/AiProject/fox-friend/server/src/dialog/interest-classifier.js)
+- [dialogue-brancher.js](file:///d:/AiProject/fox-friend/server/src/dialog/dialogue-brancher.js)
+- [step3-templates.js](file:///d:/AiProject/fox-friend/server/src/dialog/step3-templates.js)
+- [step4-templates.js](file:///d:/AiProject/fox-friend/server/src/dialog/step4-templates.js)
+- [step5-templates.js](file:///d:/AiProject/fox-friend/server/src/dialog/step5-templates.js)
+- [session-context.js](file:///d:/AiProject/fox-friend/server/src/dialog/session-context.js)
 
 ---
 

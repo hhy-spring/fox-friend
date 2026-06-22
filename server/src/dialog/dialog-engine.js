@@ -93,6 +93,25 @@ const STEP_DIALOGS = {
       followUp: '你想给我起一个名字吗？什么都行！',
       waitBeforeNextMs: 0
     }
+  },
+  // 步骤3 命名仪式 - 参考PRD §4.5.2 命名仪式子状态机入口台词
+  // mainLine 含 {foxName} 占位符，需在运行时替换
+  NAMING_CEREMONY: {
+    [REACTION_TYPES.QUICK]: {
+      mainLine: '{foxName}！好酷的名字！从现在起我就叫{foxName}了！',
+      followUp: '你给我起了这么厉害的名字，你一定也很厉害！你叫什么？',
+      waitBeforeNextMs: 1500
+    },
+    [REACTION_TYPES.HESITANT]: {
+      mainLine: '{foxName}！好酷的名字！从现在起我就叫{foxName}了！',
+      followUp: '你给我起了这么厉害的名字...你一定也很厉害！你叫什么呀？',
+      waitBeforeNextMs: 2000
+    },
+    [REACTION_TYPES.SILENT]: {
+      mainLine: '{foxName}！好酷的名字！从现在起我就叫{foxName}了！',
+      followUp: '嗯...你给我起了这么厉害的名字，你一定也很厉害吧...你叫什么？',
+      waitBeforeNextMs: 2000
+    }
   }
 };
 
@@ -114,9 +133,58 @@ function getStepDialog(step, reactionType) {
   return dialog;
 }
 
+/**
+ * 兴趣类型对应的崇拜式 mainLine 模板
+ * 参考PRD §4.5.2 命名仪式 - 兴趣分支崇拜回应
+ */
+const INTERST_MAIN_LINES = {
+  dinosaur: '{foxName}！！太酷了吧！我最喜欢恐龙了！从今天起我就叫{foxName}啦！嗷呜——！',
+  princess: '{foxName}！！哇——你会魔法吗？那从今天起我就是{foxName}了！叮——我有魔法了！',
+  speed: '{foxName}！！嗖——！太快了太快了！从今天起我就叫{foxName}了！谁也追不上我！呜——'
+};
+
+/**
+ * 获取命名仪式台词（替换 foxName 占位符）
+ * 参考PRD §4.5.2 命名仪式子状态机入口
+ * @param {string} reactionType - 孩子反应类型
+ * @param {string} foxName - 狐狸的名字
+ * @returns {object} 台词对象 { mainLine, followUp, waitBeforeNextMs }
+ */
+function getNamingCeremonyDialog(reactionType, foxName) {
+  const template = getStepDialog('NAMING_CEREMONY', reactionType);
+  return {
+    ...template,
+    mainLine: template.mainLine.replace(/\{foxName\}/g, foxName)
+  };
+}
+
+/**
+ * 获取带兴趣类型的命名仪式台词
+ * 兴趣类型匹配时使用崇拜式 mainLine，否则回退到通用模板
+ * 参考PRD §4.5.2 命名仪式 - 兴趣分支崇拜回应
+ * @param {string} reactionType - 孩子反应类型
+ * @param {string} foxName - 狐狸的名字
+ * @param {string} interestType - 兴趣类型 (dinosaur/princess/speed)
+ * @returns {object} 台词对象 { mainLine, followUp, waitBeforeNextMs }
+ */
+function getNamingCeremonyDialogWithInterest(reactionType, foxName, interestType) {
+  const dialog = getNamingCeremonyDialog(reactionType, foxName);
+  const interestMainLine = INTERST_MAIN_LINES[interestType];
+  if (interestMainLine) {
+    return {
+      ...dialog,
+      mainLine: interestMainLine.replace(/\{foxName\}/g, foxName)
+    };
+  }
+  // 未知兴趣类型回退到通用模板
+  return dialog;
+}
+
 module.exports = {
   REACTION_TYPES,
   detectReaction,
   getStepDialog,
+  getNamingCeremonyDialog,
+  getNamingCeremonyDialogWithInterest,
   STEP_DIALOGS
 };

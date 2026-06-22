@@ -13,8 +13,26 @@
 const { v4: uuidv4 } = require('uuid');
 const { createDialogFSM, DIALOG_STATES } = require('../dialog/fsm');
 const { detectReaction, getStepDialog, REACTION_TYPES } = require('../dialog/dialog-engine');
-const { getNameHints, getNameHintsLine } = require('../dialog/name-hints');
+const { NAME_HINTS, getNameHints, getNameHintsLine } = require('../dialog/name-hints');
 const { processChildInput } = require('../dialog/name-processor');
+const { createNamingCeremony } = require('../dialog/naming-ceremony');
+
+/**
+ * 根据狐狸名字推导兴趣类型
+ * 参考技术架构文档§八「兴趣分型映射」
+ *
+ * @param {string} foxName - 狐狸名字
+ * @returns {string} 兴趣类型
+ */
+function deriveInterestType(foxName) {
+  if (!foxName) return 'generic';
+  for (const hint of NAME_HINTS) {
+    if (foxName.includes(hint.character)) {
+      return hint.interestType;
+    }
+  }
+  return 'generic';
+}
 
 /**
  * 创建会话管理器
@@ -182,6 +200,78 @@ function handleVoiceMessage(sessionManager, sessionId, message) {
     };
   }
 
+  // 步骤3：命名仪式
+  // 参考PRD §4.1 步骤3：命名仪式 - 崇拜式回应 + 4步画像采集
+  if (currentState === DIALOG_STATES.NAMING_CEREMONY) {
+    // 获取或创建仪式实例
+    let ceremony = session.ceremony;
+
+    if (!ceremony) {
+      // 首次进入 NAMING_CEREMONY - 创建仪式实例
+      const foxName = session.profile.foxName;
+      const nameSource = session.profile.foxNameSource;
+      const interestType = deriveInterestType(foxName);
+      ceremony = createNamingCeremony(foxName, nameSource, interestType);
+      session.ceremony = ceremony;
+
+      // 返回崇拜式回应
+      const worshipDialog = ceremony.getWorshipResponse();
+      return {
+        dialog: worshipDialog,
+        reaction,
+        ceremonySubState: ceremony.getSubState(),
+        nextState: DIALOG_STATES.NAMING_CEREMONY,
+        stepInfo: session.fsm.getStepInfo()
+      };
+    }
+
+    // 仪式已存在 - 处理孩子的回答
+    if (message.content && message.content.trim().length > 0) {
+      ceremony.incrementProactiveSpeech();
+    }
+
+    const result = ceremony.processAnswer(message.content || '');
+
+    // 检查仪式是否完成
+    if (result.isComplete) {
+      // 更新会话画像数据
+      const ceremonyProfile = ceremony.getProfile();
+      sessionManager.updateProfile(sessionId, {
+        nickname: ceremonyProfile.nickname,
+        age: ceremonyProfile.age,
+        interests: ceremonyProfile.interests,
+        selfClaimedSkills: ceremonyProfile.selfClaimedSkills,
+        proactiveSpeechCountInCeremony: ceremony.getProactiveSpeechCount()
+      });
+
+      // 转换到 FEYNMAN_TRIGGER
+      sessionManager.updateState(sessionId, DIALOG_STATES.FEYNMAN_TRIGGER);
+
+      return {
+        dialog: null,
+        reaction,
+        ceremonyComplete: true,
+        profile: ceremonyProfile,
+        proactiveSpeechCount: ceremony.getProactiveSpeechCount(),
+        nextState: DIALOG_STATES.FEYNMAN_TRIGGER,
+        stepInfo: session.fsm.getStepInfo()
+      };
+    }
+
+    // 返回下一个问题
+    const nextQuestion = ceremony.getCurrentQuestion();
+    return {
+      dialog: nextQuestion,
+      reaction,
+      ceremonySubState: result.nextSubState,
+      collectedField: result.field,
+      collectedValue: result.value,
+      wasSkipped: result.skipped,
+      nextState: DIALOG_STATES.NAMING_CEREMONY,
+      stepInfo: session.fsm.getStepInfo()
+    };
+  }
+
   // 其他步骤（Issue #2-#5 范围，暂返回当前状态信息）
   return {
     dialog: null,
@@ -191,4 +281,4 @@ function handleVoiceMessage(sessionManager, sessionId, message) {
   };
 }
 
-module.exports = { createSessionManager, handleVoiceMessage };
+module.exports = { createSessionManager, handleVoiceMessage, deriveInterestType };

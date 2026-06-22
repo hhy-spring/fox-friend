@@ -1,6 +1,8 @@
 const {
   detectReaction,
   getStepDialog,
+  getNamingCeremonyDialog,
+  getNamingCeremonyDialogWithInterest,
   REACTION_TYPES
 } = require('../../src/dialog/dialog-engine');
 
@@ -75,6 +77,85 @@ describe('对话引擎 - 孩子反应检测与台词生成', () => {
       expect(dialog.mainLine).toContain('秘密');
       expect(dialog.mainLine).toContain('我没有名字');
       expect(dialog.followUp).toContain('你想给我起一个名字吗');
+    });
+  });
+
+  describe('步骤3 命名仪式 - getStepDialog 模板', () => {
+    test('QUICK → 返回含 {foxName} 占位符的模板', () => {
+      const dialog = getStepDialog('NAMING_CEREMONY', REACTION_TYPES.QUICK);
+      expect(dialog.mainLine).toContain('{foxName}');
+      expect(dialog.followUp).toContain('你一定也很厉害');
+      expect(dialog.waitBeforeNextMs).toBe(1500);
+    });
+
+    test('HESITANT → 返回含 {foxName} 占位符的模板', () => {
+      const dialog = getStepDialog('NAMING_CEREMONY', REACTION_TYPES.HESITANT);
+      expect(dialog.mainLine).toContain('{foxName}');
+      expect(dialog.followUp).toContain('你叫什么呀');
+      expect(dialog.waitBeforeNextMs).toBe(2000);
+    });
+
+    test('SILENT → 返回含 {foxName} 占位符的模板', () => {
+      const dialog = getStepDialog('NAMING_CEREMONY', REACTION_TYPES.SILENT);
+      expect(dialog.mainLine).toContain('{foxName}');
+      expect(dialog.followUp).toContain('嗯...你给我起了这么厉害的名字');
+      expect(dialog.waitBeforeNextMs).toBe(2000);
+    });
+  });
+
+  describe('步骤3 命名仪式 - getNamingCeremonyDialog 替换占位符', () => {
+    test('QUICK + 名字"闪电" → mainLine 中 {foxName} 被替换', () => {
+      const dialog = getNamingCeremonyDialog(REACTION_TYPES.QUICK, '闪电');
+      expect(dialog.mainLine).toBe('闪电！好酷的名字！从现在起我就叫闪电了！');
+      expect(dialog.mainLine).not.toContain('{foxName}');
+      expect(dialog.followUp).toContain('你一定也很厉害');
+      expect(dialog.waitBeforeNextMs).toBe(1500);
+    });
+
+    test('HESITANT + 名字"小花" → mainLine 中 {foxName} 被替换', () => {
+      const dialog = getNamingCeremonyDialog(REACTION_TYPES.HESITANT, '小花');
+      expect(dialog.mainLine).toBe('小花！好酷的名字！从现在起我就叫小花了！');
+      expect(dialog.followUp).toContain('你叫什么呀');
+    });
+
+    test('SILENT + 名字"大壮" → mainLine 中 {foxName} 被替换', () => {
+      const dialog = getNamingCeremonyDialog(REACTION_TYPES.SILENT, '大壮');
+      expect(dialog.mainLine).toBe('大壮！好酷的名字！从现在起我就叫大壮了！');
+      expect(dialog.followUp).toContain('嗯...');
+    });
+  });
+
+  describe('步骤3 命名仪式 - getNamingCeremonyDialogWithInterest 兴趣分支', () => {
+    test('dinosaur 兴趣 → 恐龙崇拜式 mainLine', () => {
+      const dialog = getNamingCeremonyDialogWithInterest(REACTION_TYPES.QUICK, '闪电', 'dinosaur');
+      expect(dialog.mainLine).toBe('闪电！！太酷了吧！我最喜欢恐龙了！从今天起我就叫闪电啦！嗷呜——！');
+      expect(dialog.followUp).toContain('你一定也很厉害');
+    });
+
+    test('princess 兴趣 → 公主崇拜式 mainLine', () => {
+      const dialog = getNamingCeremonyDialogWithInterest(REACTION_TYPES.QUICK, '闪电', 'princess');
+      expect(dialog.mainLine).toBe('闪电！！哇——你会魔法吗？那从今天起我就是闪电了！叮——我有魔法了！');
+    });
+
+    test('speed 兴趣 → 速度崇拜式 mainLine', () => {
+      const dialog = getNamingCeremonyDialogWithInterest(REACTION_TYPES.QUICK, '闪电', 'speed');
+      expect(dialog.mainLine).toBe('闪电！！嗖——！太快了太快了！从今天起我就叫闪电了！谁也追不上我！呜——');
+    });
+
+    test('未知兴趣类型 → 回退到通用模板', () => {
+      const dialog = getNamingCeremonyDialogWithInterest(REACTION_TYPES.QUICK, '闪电', 'unknown_type');
+      expect(dialog.mainLine).toBe('闪电！好酷的名字！从现在起我就叫闪电了！');
+    });
+
+    test('undefined 兴趣类型 → 回退到通用模板', () => {
+      const dialog = getNamingCeremonyDialogWithInterest(REACTION_TYPES.QUICK, '闪电', undefined);
+      expect(dialog.mainLine).toBe('闪电！好酷的名字！从现在起我就叫闪电了！');
+    });
+
+    test('HESITANT + dinosaur → 恐龙崇拜式 mainLine + HESITANT followUp', () => {
+      const dialog = getNamingCeremonyDialogWithInterest(REACTION_TYPES.HESITANT, '小花', 'dinosaur');
+      expect(dialog.mainLine).toContain('我最喜欢恐龙了');
+      expect(dialog.followUp).toContain('你叫什么呀');
     });
   });
 });

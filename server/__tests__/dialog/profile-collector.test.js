@@ -190,7 +190,7 @@ describe('画像采集器 - 4步画像信息采集', () => {
   });
 
   describe('buildProfile() - 构建完整画像数据', () => {
-    test('组装完整画像数据结构', () => {
+    test('组装完整画像数据结构（默认 interests_derived_from_fox_name 为空数组）', () => {
       const collectedData = {
         nickname: '闪电',
         age: 6,
@@ -205,10 +205,23 @@ describe('画像采集器 - 4步画像信息采集', () => {
         self_claimed_skills: ['跑步快'],
         fox_name: '闪电',
         fox_name_source: 'child_choice',
+        interests_derived_from_fox_name: [],
         first_meeting_reactions: {
           proactive_speech_count: 5
         }
       });
+    });
+
+    test('传入 interests_derived_from_fox_name 时正确填充（Issue #3）', () => {
+      const collectedData = {
+        nickname: '闪电',
+        age: 6,
+        interests: ['恐龙', '画画'],
+        selfClaimedSkills: ['跑步快']
+      };
+      const profile = buildProfile(collectedData, '恐龙蛋', 'child_choice', 5, ['恐龙']);
+      expect(profile.interests_derived_from_fox_name).toEqual(['恐龙']);
+      expect(profile.fox_name).toBe('恐龙蛋');
     });
 
     test('跳过的字段在画像数据中为 null', () => {

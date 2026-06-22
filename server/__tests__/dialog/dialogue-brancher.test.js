@@ -3,6 +3,7 @@ const {
 } = require('../../src/dialog/dialogue-brancher');
 const { INTEREST_TYPES } = require('../../src/dialog/interest-classifier');
 const { STEP3_SUB_STATES } = require('../../src/dialog/step3-templates');
+const { STATES: FEYNMAN_STATES } = require('../../src/dialog/feynman-orchestrator');
 
 describe('台词分型引擎集成模块 - Issue #3 dialogue-brancher', () => {
   describe('createDialogueBrancher - 基础功能', () => {
@@ -197,6 +198,128 @@ describe('台词分型引擎集成模块 - Issue #3 dialogue-brancher', () => {
         2
       );
       expect(profile.interests_derived_from_fox_name).toEqual([]);
+    });
+  });
+
+  describe('getStep4Flow - Issue #4 费曼学习法流程编排器', () => {
+    test('getStep4Flow 返回费曼编排器实例，初始状态为 TRIGGER', () => {
+      const brancher = createDialogueBrancher('恐龙蛋', 'child_001');
+      const flow = brancher.getStep4Flow();
+      expect(flow).toHaveProperty('getState');
+      expect(flow).toHaveProperty('getTriggerDialog');
+      expect(flow).toHaveProperty('processChildResponse');
+      expect(flow).toHaveProperty('isComplete');
+      expect(flow.getState()).toBe(FEYNMAN_STATES.TRIGGER);
+    });
+
+    test('dinosaur 编排器触发台词聚焦"龙"字', () => {
+      const brancher = createDialogueBrancher('恐龙蛋', 'child_001');
+      const flow = brancher.getStep4Flow();
+      const trigger = flow.getTriggerDialog();
+      expect(trigger.targetCharacter).toBe('龙');
+      expect(trigger.mainLine).toContain('龙');
+      expect(flow.getState()).toBe(FEYNMAN_STATES.AWAIT_RESPONSE);
+    });
+
+    test('dinosaur 编排器处理"龙"反应 → correct 崇拜反馈 + teaching_willingness=true', () => {
+      const brancher = createDialogueBrancher('恐龙蛋', 'child_001');
+      const flow = brancher.getStep4Flow();
+      flow.getTriggerDialog();
+      const result = flow.processChildResponse('龙');
+      expect(result.teachingWillingness).toBe(true);
+      expect(result.mainLine).toContain('你太厉害了');
+      expect(result.classification.type).toBe('correct');
+      expect(flow.isComplete()).toBe(true);
+    });
+
+    test('dinosaur 编排器处理"不知道"反应 → unsure 共同探索 + teaching_willingness=true', () => {
+      const brancher = createDialogueBrancher('恐龙蛋', 'child_001');
+      const flow = brancher.getStep4Flow();
+      flow.getTriggerDialog();
+      const result = flow.processChildResponse('不知道');
+      expect(result.teachingWillingness).toBe(true);
+      expect(result.mainLine).toContain('我们一起查查');
+      expect(result.classification.type).toBe('unsure');
+    });
+
+    test('dinosaur 编排器处理"不要"反应 → refuse 不强制教学 + teaching_willingness=false', () => {
+      const brancher = createDialogueBrancher('恐龙蛋', 'child_001');
+      const flow = brancher.getStep4Flow();
+      flow.getTriggerDialog();
+      const result = flow.processChildResponse('不要');
+      expect(result.teachingWillingness).toBe(false);
+      expect(result.classification.type).toBe('refuse');
+    });
+
+    test('generic 编排器 targetCharacter 为 null', () => {
+      const brancher = createDialogueBrancher('小白', 'child_001');
+      const flow = brancher.getStep4Flow();
+      expect(flow.getTargetCharacter()).toBeNull();
+    });
+
+    test('编排器计时预算为 1 分钟（60000ms）', () => {
+      const brancher = createDialogueBrancher('恐龙蛋', 'child_001');
+      const flow = brancher.getStep4Flow();
+      const timing = flow.getTimingInfo();
+      expect(timing.budget).toBe(60000);
+      expect(timing.withinBudget).toBe(true);
+    });
+  });
+
+  describe('buildProfileWithInterest - Issue #4 teaching_willingness 支持', () => {
+    test('传入 teachingWillingness=true 时写入 first_meeting_reactions', () => {
+      const brancher = createDialogueBrancher('恐龙蛋', 'child_001');
+      const collectedData = {
+        nickname: '小明',
+        age: 5,
+        interests: ['恐龙'],
+        selfClaimedSkills: '跑得快'
+      };
+      const profile = brancher.buildProfileWithInterest(
+        collectedData,
+        '恐龙蛋',
+        'child_choice',
+        3,
+        [],
+        true
+      );
+      expect(profile.first_meeting_reactions.teaching_willingness).toBe(true);
+    });
+
+    test('传入 teachingWillingness=false 时写入 first_meeting_reactions', () => {
+      const brancher = createDialogueBrancher('恐龙蛋', 'child_001');
+      const collectedData = {
+        nickname: '小明',
+        age: 5,
+        interests: ['恐龙'],
+        selfClaimedSkills: '跑得快'
+      };
+      const profile = brancher.buildProfileWithInterest(
+        collectedData,
+        '恐龙蛋',
+        'child_choice',
+        3,
+        [],
+        false
+      );
+      expect(profile.first_meeting_reactions.teaching_willingness).toBe(false);
+    });
+
+    test('不传 teachingWillingness 时默认为 null（向后兼容）', () => {
+      const brancher = createDialogueBrancher('恐龙蛋', 'child_001');
+      const collectedData = {
+        nickname: '小明',
+        age: 5,
+        interests: ['恐龙'],
+        selfClaimedSkills: '跑得快'
+      };
+      const profile = brancher.buildProfileWithInterest(
+        collectedData,
+        '恐龙蛋',
+        'child_choice',
+        3
+      );
+      expect(profile.first_meeting_reactions.teaching_willingness).toBeNull();
     });
   });
 

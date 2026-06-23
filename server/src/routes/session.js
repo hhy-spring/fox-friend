@@ -9,6 +9,18 @@ router.post('/', (req, res) => {
   const id = uuidv4();
   const { child_id } = req.body;
 
+  // 校验 child_id 是否存在，避免外键约束失败时返回原始 500 错误（Issue #27）
+  if (child_id) {
+    const profile = db.prepare(
+      'SELECT id FROM child_profiles WHERE id = ?'
+    ).get(child_id);
+    if (!profile) {
+      return res.status(400).json({
+        error: 'child_id does not exist, please create profile first'
+      });
+    }
+  }
+
   try {
     db.prepare(
       'INSERT INTO sessions (id, child_id) VALUES (?, ?)'

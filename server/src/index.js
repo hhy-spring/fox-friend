@@ -40,6 +40,14 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+// SPA 回退路由：所有非 API 请求返回 index.html
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api/') || req.path.startsWith('/ws/')) {
+    return next();
+  }
+  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+});
+
 // 初始化数据库
 const dbPath = path.join(__dirname, '..', 'data', 'fox-friend.db');
 const db = initDB(dbPath);

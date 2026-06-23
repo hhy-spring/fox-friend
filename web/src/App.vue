@@ -63,9 +63,25 @@ const EMOTION_TO_EXPRESSION = {
   worship: 'worship'
 };
 
+// 后端 fox_dialog 消息的 dialog 字段可能是字符串，也可能是结构化对象
+// { mainLine, followUp, waitBeforeNextMs }（见 ws-voice-handler.js 各发送点）。
+// 统一归一化为孩子能看到的展示文本，避免渲染成 [object Object]。
+function normalizeDialogText(dialog) {
+  if (!dialog) return null;
+  if (typeof dialog === 'string') return dialog;
+  if (typeof dialog === 'object') {
+    const parts = [];
+    if (dialog.mainLine) parts.push(dialog.mainLine);
+    if (dialog.followUp) parts.push(dialog.followUp);
+    return parts.length > 0 ? parts.join(' ') : null;
+  }
+  return String(dialog);
+}
+
 function handleFoxDialog(message) {
-  if (message.dialog) {
-    dialogText.value = message.dialog;
+  const displayText = normalizeDialogText(message.dialog);
+  if (displayText) {
+    dialogText.value = displayText;
   }
 
   if (message.emotion && EMOTION_TO_EXPRESSION[message.emotion]) {
@@ -79,7 +95,7 @@ function handleFoxDialog(message) {
   foxSpeaking.value = true;
 
   if (speakingTimer) clearTimeout(speakingTimer);
-  const dialogLength = message.dialog ? message.dialog.length : 20;
+  const dialogLength = displayText ? displayText.length : 20;
   const speakDuration = Math.max(2000, dialogLength * 150);
   speakingTimer = setTimeout(() => {
     foxSpeaking.value = false;

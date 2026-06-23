@@ -82,6 +82,45 @@ describe('App', () => {
       expect(wrapper.find('.fox-dialog-text').text()).toContain('你好你好');
     });
 
+    test('后端结构化 dialog 对象应渲染为文本而非 [object Object]', async () => {
+      // 回归测试：ws-voice-handler.js 发送的 dialog 是
+      // { mainLine, followUp, waitBeforeNextMs } 对象，前端必须归一化为展示文本
+      const wrapper = mount(App);
+      await flushPromises();
+
+      wrapper.vm.handleFoxDialog({
+        type: 'fox_dialog',
+        dialog: {
+          mainLine: '你好你好！我一直在等一个小朋友...你终于来了！',
+          followUp: '你听见我说话了吗？',
+          waitBeforeNextMs: 2000
+        },
+        step: 'APPEARANCE'
+      });
+      await flushPromises();
+
+      const text = wrapper.find('.fox-dialog-text').text();
+      expect(text).not.toContain('[object Object]');
+      expect(text).toContain('你好你好');
+      expect(text).toContain('你听见我说话了吗');
+    });
+
+    test('仅含 mainLine 的结构化 dialog 应正常渲染', async () => {
+      const wrapper = mount(App);
+      await flushPromises();
+
+      wrapper.vm.handleFoxDialog({
+        type: 'fox_dialog',
+        dialog: { mainLine: '闪电！快过来，我发现了一件事！', followUp: null },
+        step: 'DAILY_MEETING'
+      });
+      await flushPromises();
+
+      const text = wrapper.find('.fox-dialog-text').text();
+      expect(text).not.toContain('[object Object]');
+      expect(text).toContain('闪电');
+    });
+
     test('狐狸说话时角色应为 speaking 状态', async () => {
       const wrapper = mount(App);
       await flushPromises();

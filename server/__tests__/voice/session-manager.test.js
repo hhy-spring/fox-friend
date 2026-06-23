@@ -109,7 +109,8 @@ describe('会话管理器 - WebSocket 语音端点', () => {
     let sessionManager;
 
     // 辅助函数：将会话推进到 NAMING_CEREMONY 的 ASK_NICKNAME 子状态
-    // Issue #18: 崇拜回应现在在 HELP_REQUEST 阶段返回，所以需要额外处理一条消息
+    // Issue #19 修复：崇拜回应在 HELP_REQUEST 阶段返回时，仪式已自动推进到 ASK_NICKNAME
+    // 不再需要额外发送"好酷"消息来触发 WORSHIP→ASK_NICKNAME 转换
     function advanceToNamingCeremony(foxName = '闪电') {
       const session = sessionManager.createSession('child_001');
       const sid = session.id;
@@ -119,17 +120,11 @@ describe('会话管理器 - WebSocket 语音端点', () => {
         responseTimeMs: 500,
         content: '你好'
       });
-      // HELP_REQUEST → NAMING_CEREMONY（提供名字，返回崇拜回应）
+      // HELP_REQUEST → NAMING_CEREMONY（提供名字，返回崇拜回应 + 推进到 ASK_NICKNAME）
       handleVoiceMessage(sessionManager, sid, {
         type: 'child_response',
         responseTimeMs: 800,
         content: foxName
-      });
-      // NAMING_CEREMONY: 处理 WORSHIP 回应 → 进入 ASK_NICKNAME
-      handleVoiceMessage(sessionManager, sid, {
-        type: 'child_response',
-        responseTimeMs: 1000,
-        content: '好酷'
       });
       return sid;
     }
@@ -152,7 +147,8 @@ describe('会话管理器 - WebSocket 语音端点', () => {
     });
 
     // Slice 1: Issue #18 - 名字记录后立即返回崇拜回应（在 HELP_REQUEST 阶段）
-    test('HELP_REQUEST 提供名字 → 立即返回崇拜式回应 + 创建仪式实例', () => {
+    // Issue #19: 仪式同时推进到 ASK_NICKNAME，返回昵称问题
+    test('HELP_REQUEST 提供名字 → 立即返回崇拜式回应 + 创建仪式实例 + 推进到 ASK_NICKNAME', () => {
       const session = sessionManager.createSession('child_001');
       const sid = session.id;
       // APPEARANCE → HELP_REQUEST
@@ -167,20 +163,24 @@ describe('会话管理器 - WebSocket 语音端点', () => {
       // 仪式实例应已创建
       const updatedSession = sessionManager.getSession(sid);
       expect(updatedSession.ceremony).toBeDefined();
-      expect(updatedSession.ceremony.getSubState()).toBe('WORSHIP');
+      // Issue #19: 仪式已推进到 ASK_NICKNAME（崇拜回应已返回，等待昵称回答）
+      expect(updatedSession.ceremony.getSubState()).toBe('ASK_NICKNAME');
 
       // 返回崇拜式回应（非求助台词）
       expect(result.dialog).toBeDefined();
       expect(result.dialog.mainLine).toContain('闪电');
-      expect(result.ceremonySubState).toBe('WORSHIP');
+      // Issue #19: 同时返回昵称问题
+      expect(result.nextQuestion).toBeDefined();
+      expect(result.nextQuestion.field).toBe('nickname');
+      expect(result.ceremonySubState).toBe('ASK_NICKNAME');
       expect(result.nextState).toBe('NAMING_CEREMONY');
     });
 
-    // Slice 2: WORSHIP→ASK_NICKNAME 返回昵称问题
-    test('WORSHIP 子状态处理回答 → 返回昵称问题', () => {
-      // advanceToNamingCeremony 已处理 WORSHIP 回应（'好酷'）→ 进入 ASK_NICKNAME
+    // Slice 2: ASK_NICKNAME 处理昵称回答 → 返回年龄问题
+    test('ASK_NICKNAME 子状态处理回答 → 返回昵称问题', () => {
+      // Issue #19: advanceToNamingCeremony 后仪式已在 ASK_NICKNAME
       const sid = advanceToNamingCeremony('闪电');
-      // 此时 ceremony 在 ASK_NICKNAME，发送回答
+      // 发送昵称回答
       const result = handleVoiceMessage(sessionManager, sid, {
         type: 'child_response', responseTimeMs: 1200, content: '小明'
       });
@@ -290,14 +290,15 @@ describe('会话管理器 - WebSocket 语音端点', () => {
       expect(session.profile.nickname).toBe('小明');
       expect(session.profile.age).toBe(6);
       expect(session.profile.interests).toEqual(['画画']);
-      expect(session.profile.selfClaimedSkills).toBe('跑步很快');
+      // Issue #19: selfClaimedSkills 改为数组格式
+      expect(session.profile.selfClaimedSkills).toEqual(['跑步很快']);
       expect(session.profile.proactiveSpeechCountInCeremony).toBeDefined();
     });
 
     // Slice 8: 主动发言计数
     test('仪式中主动发言计数', () => {
       const sid = advanceToNamingCeremony('闪电');
-      // advanceToNamingCeremony 中 WORSHIP 回应 '好酷' 已计1次
+      // Issue #19: WORSHIP 不再需要单独的消息，仪式已推进到 ASK_NICKNAME
       // 后续4个回答各计1次
       handleVoiceMessage(sessionManager, sid, {
         type: 'child_response', responseTimeMs: 1200, content: '小明'
@@ -312,8 +313,8 @@ describe('会话管理器 - WebSocket 语音端点', () => {
         type: 'child_response', responseTimeMs: 1200, content: '跑步很快'
       });
 
-      // WORSHIP 回应(1) + 4个回答(4) = 5
-      expect(result.proactiveSpeechCount).toBe(5);
+      // 4个回答(4) = 4 (WORSHIP 不再需要单独的消息)
+      expect(result.proactiveSpeechCount).toBe(4);
     });
 
     // Slice 9: deriveInterestType 辅助函数（委托 classifyInterest）

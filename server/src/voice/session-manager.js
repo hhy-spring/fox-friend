@@ -199,11 +199,15 @@ function handleVoiceMessage(sessionManager, sessionId, message) {
       // 转换到 NAMING_CEREMONY 状态
       sessionManager.updateState(sessionId, DIALOG_STATES.NAMING_CEREMONY);
 
-      // 返回崇拜式回应（而非求助台词）
+      // Issue #19 修复：崇拜回应已在此返回，推进仪式从 WORSHIP 到 ASK_NICKNAME
+      // 这样孩子的下一条消息会直接作为昵称回答处理，而非被 WORSHIP 转换消费
       const worshipDialog = ceremony.getWorshipResponse();
+      ceremony.startCollection();
+      const nextQuestion = ceremony.getCurrentQuestion();
 
       return {
         dialog: worshipDialog,
+        nextQuestion,
         reaction,
         nameRecorded: true,
         foxName,
@@ -248,10 +252,14 @@ function handleVoiceMessage(sessionManager, sessionId, message) {
         session.profile.foxNameSource
       );
 
-      // 返回崇拜式回应
+      // Issue #19: 推进仪式从 WORSHIP 到 ASK_NICKNAME，与主路径保持一致
       const worshipDialog = ceremony.getWorshipResponse();
+      ceremony.startCollection();
+      const nextQuestion = ceremony.getCurrentQuestion();
+
       return {
         dialog: worshipDialog,
+        nextQuestion,
         reaction,
         ceremonySubState: ceremony.getSubState(),
         nextState: DIALOG_STATES.NAMING_CEREMONY,

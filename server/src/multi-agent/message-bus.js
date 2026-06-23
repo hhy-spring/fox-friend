@@ -1,139 +1,136 @@
 /**
- * MessageBus — 多智能体通信协议
+ * 多智能体消息总线 - 标准化智能体间通信协议
  *
- * 职责：
- * - 消息发布/订阅（Pub/Sub）
- * - 点对点消息传递
- * - 广播消息
- * - 消息历史记录与追溯
- * - 错误隔离
+ * 参考技术架构执行摘要§三「对话引擎架构」
  *
- * 消息格式：
- * {
- *   id: string,          // 自动生成
- *   from: string,        // 发送者 ID
- *   to: string,          // 接收者 ID | 'broadcast'
- *   type: string,        // 消息类型
- *   payload: any,        // 消息内容
- *   timestamp: number,   // 自动生成
- *   correlationId?: string  // 关联原始消息 ID
- * }
+ * 通信协议规范：
+ *   - 消息格式：{ id, type, from, to, payload, timestamp, correlationId }
+ *   - 传输方式：同步事件发射器（MVP 阶段），可扩展为异步队列
+ *   - 错误处理：消息携带 error 字段，接收方负责处理
+ *
+ * Issue #23: 步骤2求助台词和暗示选项消息结构修复
  */
 
+const { EventEmitter } = require('events');
 const { v4: uuidv4 } = require('uuid');
 
+/**
+ * 消息类型枚举
+ */
 const MESSAGE_TYPES = {
-  TASK_ASSIGNED: 'task_assigned',
-  TASK_COMPLETED: 'task_completed',
-  TASK_FAILED: 'task_failed',
-  STATE_SYNC: 'state_sync',
-  QUERY: 'query',
-  RESPONSE: 'response',
-  PROGRESS: 'progress'
+  TASK_ASSIGN: 'TASK_ASSIGN',        // 任务分配
+  TASK_RESULT: 'TASK_RESULT',        // 任务结果
+  TASK_ERROR: 'TASK_ERROR',          // 任务错误
+  STATE_SYNC: 'STATE_SYNC',          // 状态同步
+  COORDINATION: 'COORDINATION',      // 协调指令
+  VALIDATION: 'VALIDATION'           // 验证请求
 };
 
 /**
  * 创建消息总线
- * @returns {object} MessageBus 实例
+ * @returns {object} 消息总线实例
  */
 function createMessageBus() {
-  const subscribers = new Map();
-  const history = [];
-
-  /**
-   * 订阅消息
-   * @param {string} subscriberId - 订阅者 ID
-   * @param {function} handler - 消息处理函数
-   * @returns {function} 取消订阅函数
-   */
-  function subscribe(subscriberId, handler) {
-    if (!subscribers.has(subscriberId)) {
-      subscribers.set(subscriberId, []);
-    }
-    subscribers.get(subscriberId).push(handler);
-
-    return () => {
-      const handlers = subscribers.get(subscriberId);
-      if (handlers) {
-        const idx = handlers.indexOf(handler);
-        if (idx !== -1) handlers.splice(idx, 1);
-        if (handlers.length === 0) subscribers.delete(subscriberId);
-      }
-    };
-  }
+  const emitter = new EventEmitter();
+  const messageLog = [];
+  const subscriptions = new Map();
 
   /**
    * 发布消息
-   * @param {object} message - 消息对象
+   * @param {object} params
+   * @param {string} params.type - 消息类型
+   * @param {string} params.from - 发送方智能体 ID
+   * @param {string} params.to - 接收方智能体 ID（'*' 表示广播）
+   * @param {object} params.payload - 消息内容
+   * @param {string} [params.correlationId] - 关联 ID（用于请求-响应模式）
+   * @returns {string} 消息 ID
    */
-  function publish(message) {
-    const fullMessage = {
-      id: message.id || uuidv4(),
-      from: message.from,
-      to: message.to || 'broadcast',
-      type: message.type,
-      payload: message.payload,
-      timestamp: message.timestamp || Date.now(),
-      correlationId: message.correlationId
+  function publish({ type, from, to, payload, correlationId }) {
+    const message = {
+      id: uuidv4(),
+      type,
+      from,
+      to,
+      payload,
+      timestamp: Date.now(),
+      correlationId: correlationId || uuidv4(),
+      error: null
     };
 
-    history.push(fullMessage);
+    messageLog.push(message);
 
-    const targetSubscribers = [];
-    if (fullMessage.to === 'broadcast') {
-      for (const [id, handlers] of subscribers) {
-        if (id !== fullMessage.from) {
-          targetSubscribers.push(...handlers);
-        }
+    // 定向发送
+    if (to !== '*') {
+      const handler = subscriptions.get(to);
+      if (handler) {
+        handler(message);
       }
     } else {
-      const handlers = subscribers.get(fullMessage.to);
-      if (handlers) {
-        targetSubscribers.push(...handlers);
+      // 广播
+      for (const handler of subscriptions.values()) {
+        handler(message);
       }
     }
 
-    for (const handler of targetSubscribers) {
-      try {
-        handler(fullMessage);
-      } catch (err) {
-        console.error(`[MessageBus] 订阅者处理消息失败: ${err.message}`);
+    emitter.emit('message', message);
+    return message.id;
+  }
+
+  /**
+   * 订阅消息
+   * @param {string} agentId - 智能体 ID
+   * @param {function} handler - 消息处理函数
+   */
+  function subscribe(agentId, handler) {
+    subscriptions.set(agentId, handler);
+  }
+
+  /**
+   * 发布错误消息
+   * @param {string} from - 发送方
+   * @param {string} to - 接收方
+   * @param {Error} error - 错误对象
+   * @param {string} [correlationId] - 关联 ID
+   */
+  function publishError(from, to, error, correlationId) {
+    const message = {
+      id: uuidv4(),
+      type: MESSAGE_TYPES.TASK_ERROR,
+      from,
+      to,
+      payload: {},
+      timestamp: Date.now(),
+      correlationId: correlationId || uuidv4(),
+      error: {
+        name: error.name,
+        message: error.message,
+        stack: error.stack
       }
+    };
+    messageLog.push(message);
+
+    const handler = subscriptions.get(to);
+    if (handler) {
+      handler(message);
     }
+    emitter.emit('error', message);
   }
 
   /**
-   * 获取消息历史
-   * @param {number} limit - 限制数量
-   * @returns {array} 消息历史
+   * 获取消息日志（用于版本控制和追踪）
+   * @returns {Array}
    */
-  function getHistory(limit) {
-    if (limit) return history.slice(-limit);
-    return [...history];
-  }
-
-  /**
-   * 按类型获取消息历史
-   * @param {string} type - 消息类型
-   * @returns {array} 过滤后的消息历史
-   */
-  function getHistoryByType(type) {
-    return history.filter(msg => msg.type === type);
-  }
-
-  /**
-   * 清空历史
-   */
-  function clearHistory() {
-    history.length = 0;
+  function getMessageLog() {
+    return [...messageLog];
   }
 
   return {
-    subscribe,
     publish,
-    getHistory,
-    getHistoryByType,
-    clearHistory
+    subscribe,
+    publishError,
+    getMessageLog,
+    on: emitter.on.bind(emitter),
+    emit: emitter.emit.bind(emitter)
   };
 }
 

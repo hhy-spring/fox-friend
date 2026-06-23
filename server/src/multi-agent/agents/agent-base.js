@@ -1,151 +1,66 @@
 /**
- * AgentBase — 智能体基类
+ * 智能体基类 - 定义标准化智能体接口
  *
- * 职责：
- * - 生命周期管理（IDLE → READY → RUNNING → READY/ERROR）
- * - 任务执行（通过 executor 函数）
- * - 消息处理（订阅 MessageBus）
- * - 状态管理
- * - 结果累积
- *
- * 接口：
- * - initialize(): 初始化智能体
- * - execute(task): 执行任务
- * - getStatus(): 获取当前状态
- * - getResults(): 获取所有结果
- * - getLastError(): 获取最后错误
+ * 参考技术架构执行摘要§三「对话引擎架构」
+ * 所有智能体必须实现 execute 方法，接受输入和上下文
  */
-
-const { MESSAGE_TYPES } = require('../message-bus');
-
-const AGENT_STATUS = {
-  IDLE: 'idle',
-  READY: 'ready',
-  RUNNING: 'running',
-  ERROR: 'error',
-  STOPPED: 'stopped'
-};
 
 /**
- * 创建智能体基类实例
- * @param {object} options
- * @param {string} options.id - 智能体 ID
- * @param {string[]} options.capabilities - 能力列表
- * @param {object} options.bus - MessageBus 实例
- * @param {function} [options.executor] - 任务执行函数
- * @param {function} [options.onMessage] - 消息处理函数
- * @param {function} [options.onInitialize] - 初始化函数
- * @returns {object} AgentBase 实例
+ * 创建智能体基类
+ * @param {object} config
+ * @param {string} config.id - 智能体唯一标识
+ * @param {string} config.name - 智能体名称
+ * @param {string} config.role - 智能体角色描述
+ * @param {function} config.execute - 执行函数
+ * @returns {object} 智能体实例
  */
-function createAgentBase(options = {}) {
-  const {
-    id,
-    capabilities = [],
-    bus,
-    executor,
-    onMessage,
-    onInitialize
-  } = options;
-
-  let status = AGENT_STATUS.IDLE;
-  let lastError = null;
-  const results = [];
-  let unsubscribe = null;
-
-  /**
-   * 初始化智能体
-   */
-  async function initialize() {
-    if (onInitialize) {
-      await onInitialize();
-    }
-
-    if (bus) {
-      unsubscribe = bus.subscribe(id, (msg) => {
-        if (onMessage) {
-          try {
-            onMessage(msg);
-          } catch (err) {
-            console.error(`[Agent:${id}] 消息处理失败: ${err.message}`);
-          }
-        }
-      });
-    }
-
-    status = AGENT_STATUS.READY;
-  }
-
-  /**
-   * 执行任务
-   * @param {object} task - 任务对象
-   * @returns {Promise<any>} 执行结果
-   */
-  async function execute(task) {
-    if (status !== AGENT_STATUS.READY) {
-      throw new Error(`智能体 ${id} 当前状态为 ${status}，无法执行任务`);
-    }
-
-    status = AGENT_STATUS.RUNNING;
-
-    try {
-      const result = executor ? await executor(task) : { taskId: task.id };
-      results.push({ taskId: task.id, ...result });
-
-      if (bus) {
-        bus.publish({
-          from: id,
-          to: 'coordinator',
-          type: MESSAGE_TYPES.TASK_COMPLETED,
-          payload: { taskId: task.id, result }
-        });
-      }
-
-      status = AGENT_STATUS.READY;
-      return result;
-    } catch (err) {
-      lastError = err;
-      status = AGENT_STATUS.ERROR;
-
-      if (bus) {
-        bus.publish({
-          from: id,
-          to: 'coordinator',
-          type: MESSAGE_TYPES.TASK_FAILED,
-          payload: { taskId: task.id, error: err.message }
-        });
-      }
-
-      throw err;
-    }
-  }
-
-  /**
-   * 停止智能体
-   */
-  function stop() {
-    if (unsubscribe) {
-      unsubscribe();
-      unsubscribe = null;
-    }
-    status = AGENT_STATUS.STOPPED;
-  }
-
-  function getId() { return id; }
-  function getStatus() { return status; }
-  function getCapabilities() { return [...capabilities]; }
-  function getResults() { return [...results]; }
-  function getLastError() { return lastError; }
-
+function createAgent(config) {
   return {
-    initialize,
-    execute,
-    stop,
-    getId,
-    getStatus,
-    getCapabilities,
-    getResults,
-    getLastError
+    id: config.id,
+    name: config.name,
+    role: config.role,
+    capabilities: config.capabilities || [],
+
+    /**
+     * 执行任务
+     * @param {object} input - 任务输入
+     * @param {object} context - 执行上下文 { publish, getState }
+     * @returns {Promise<object>} 执行结果
+     */
+    async execute(input, context) {
+      const startTime = Date.now();
+      try {
+        // 发布开始状态
+        context.publish('STATE_SYNC', {
+          agentId: config.id,
+          state: 'RUNNING',
+          input
+        });
+
+        const result = await config.execute(input, context);
+
+        const durationMs = Date.now() - startTime;
+
+        // 发布完成状态
+        context.publish('STATE_SYNC', {
+          agentId: config.id,
+          state: 'COMPLETED',
+          result,
+          durationMs
+        });
+
+        return { success: true, result, durationMs };
+      } catch (error) {
+        const durationMs = Date.now() - startTime;
+        context.publish('TASK_ERROR', {
+          agentId: config.id,
+          error: error.message,
+          durationMs
+        });
+        throw error;
+      }
+    }
   };
 }
 
-module.exports = { createAgentBase, AGENT_STATUS };
+module.exports = { createAgent };

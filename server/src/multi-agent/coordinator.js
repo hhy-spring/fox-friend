@@ -1,236 +1,331 @@
 /**
- * Coordinator — 中央协调模块
+ * 多智能体协调器 - 中央协调模块
+ *
+ * 参考技术架构执行摘要§三「对话引擎架构」FSM Router 模式
  *
  * 职责：
- * - 任务拆解（将主任务分解为子任务）
- * - 依赖关系分析（识别并行/顺序任务）
- * - 优先级排序
- * - 并行/顺序执行调度
- * - 结果集成
- * - 异常处理（单任务失败不阻塞其他任务）
- * - 进度监控
+ *   1. 任务拆解与依赖分析
+ *   2. 智能体调度与并行执行
+ *   3. 状态监控与异常处理
+ *   4. 结果集成与版本控制
  *
- * 架构：
- *   ┌──────────────┐
- *   │  Coordinator  │
- *   │  - decompose  │
- *   │  - schedule   │
- *   │  - execute    │
- *   │  - integrate  │
- *   └──────┬───────┘
- *          │
- *   ┌──────┴───────┐
- *   │  Agent Pool   │
- *   │  [A1, A2, A3] │
- *   └──────────────┘
+ * 性能目标（Issue #23 要求）：
+ *   - 执行速度比单智能体方案提升 ≥50%
+ *   - 任务处理准确性 ≥99.5%
+ *   - 结果完整性 100%
+ *   - CPU 峰值 ≤80%
  */
 
-const { v4: uuidv4 } = require('uuid');
+const { createMessageBus, MESSAGE_TYPES } = require('./message-bus');
 
-const TASK_STATUS = {
-  PENDING: 'pending',
-  RUNNING: 'running',
-  COMPLETED: 'completed',
-  FAILED: 'failed'
+/**
+ * 任务状态枚举
+ */
+const TASK_STATES = {
+  PENDING: 'PENDING',
+  RUNNING: 'RUNNING',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
+  SKIPPED: 'SKIPPED'
 };
 
 /**
  * 创建协调器
  * @param {object} options
- * @param {object} options.bus - MessageBus 实例
- * @param {array} [options.agents] - 可用智能体列表
- * @returns {object} Coordinator 实例
+ * @param {number} [options.maxConcurrency=4] - 最大并发数
+ * @returns {object} 协调器实例
  */
 function createCoordinator(options = {}) {
-  const { bus, agents = [] } = options;
-  const agentPool = [...agents];
-  const progress = { total: 0, completed: 0, failed: 0, running: 0 };
+  const maxConcurrency = options.maxConcurrency || 4;
+  const messageBus = createMessageBus();
+  const agents = new Map();
+  const tasks = new Map();
+  const results = new Map();
+  const stateSnapshots = [];
 
   /**
    * 注册智能体
-   * @param {object} agent - 智能体实例
+   * @param {object} agent - 智能体实例 { id, name, execute }
    */
   function registerAgent(agent) {
-    agentPool.push(agent);
+    agents.set(agent.id, agent);
+    messageBus.subscribe(agent.id, (message) => {
+      if (message.type === MESSAGE_TYPES.TASK_ASSIGN && message.to === agent.id) {
+        handleAgentTask(agent, message);
+      }
+    });
   }
 
   /**
-   * 任务拆解
-   * @param {object} mainTask - 主任务
-   * @returns {array} 子任务列表
+   * 处理智能体任务
    */
-  function decompose(mainTask) {
-    const { components = [], goal } = mainTask;
+  async function handleAgentTask(agent, message) {
+    const task = tasks.get(message.payload.taskId);
+    if (!task) return;
 
-    return components.map((component, index) => ({
-      id: `task-${uuidv4().slice(0, 8)}`,
-      type: goal || 'build',
-      payload: { component },
-      dependencies: [],
-      priority: index + 1
-    }));
-  }
-
-  /**
-   * 获取可并行执行的任务（无依赖或依赖已完成）
-   * @param {array} tasks - 所有任务
-   * @param {Set} completedIds - 已完成的任务 ID
-   * @returns {array} 可并行执行的任务
-   */
-  function getParallelTasks(tasks, completedIds = new Set()) {
-    return tasks.filter(task =>
-      task.dependencies.every(dep => completedIds.has(dep))
-    );
-  }
-
-  /**
-   * 按优先级排序任务
-   * @param {array} tasks - 任务列表
-   * @returns {array} 排序后的任务
-   */
-  function sortByPriority(tasks) {
-    return [...tasks].sort((a, b) => (a.priority || 0) - (b.priority || 0));
-  }
-
-  /**
-   * 获取可用的智能体
-   * @returns {object|null} 可用智能体
-   */
-  function getAvailableAgent() {
-    return agentPool.find(agent => agent.getStatus() === 'ready') || null;
-  }
-
-  /**
-   * 执行单个任务
-   * @param {object} task - 任务
-   * @returns {Promise<object>} 执行结果
-   */
-  async function executeSingleTask(task) {
-    const agent = getAvailableAgent();
-    if (!agent) {
-      progress.failed++;
-      return { taskId: task.id, error: '无可用智能体', status: TASK_STATUS.FAILED };
-    }
+    task.state = TASK_STATES.RUNNING;
+    task.startedAt = Date.now();
 
     try {
-      progress.running++;
-      const result = await agent.execute(task);
-      progress.running--;
-      progress.completed++;
-      return { taskId: task.id, ...result, status: TASK_STATUS.COMPLETED };
-    } catch (err) {
-      progress.running--;
-      progress.failed++;
-      return { taskId: task.id, error: err.message, status: TASK_STATUS.FAILED };
+      const result = await agent.execute(message.payload.input, {
+        publish: (type, payload) => messageBus.publish({
+          type,
+          from: agent.id,
+          to: '*',
+          payload,
+          correlationId: message.correlationId
+        }),
+        getState: () => getSharedState()
+      });
+
+      task.state = TASK_STATES.COMPLETED;
+      task.completedAt = Date.now();
+      task.durationMs = task.completedAt - task.startedAt;
+      results.set(task.id, result);
+
+      messageBus.publish({
+        type: MESSAGE_TYPES.TASK_RESULT,
+        from: agent.id,
+        to: 'coordinator',
+        payload: { taskId: task.id, result },
+        correlationId: message.correlationId
+      });
+    } catch (error) {
+      task.state = TASK_STATES.FAILED;
+      task.error = error.message;
+      messageBus.publishError(agent.id, 'coordinator', error, message.correlationId);
     }
   }
 
   /**
-   * 获取可用智能体数量
-   * @returns {number} 可用智能体数量
+   * 拆解任务为子任务
+   * @param {object} mainTask - 主任务
+   * @returns {Array} 子任务列表（含依赖关系）
    */
-  function getAvailableAgentCount() {
-    return agentPool.filter(agent => agent.getStatus() === 'ready').length;
+  function decomposeTask(mainTask) {
+    const subtasks = [];
+
+    // 阶段1：诊断（可并行）
+    subtasks.push({
+      id: 'diagnose-name-detection',
+      name: '诊断名字检测逻辑',
+      agentId: 'diagnostic-agent',
+      dependencies: [],
+      priority: 1,
+      input: {
+        target: 'name-processor.js',
+        testInput: mainTask.testInput || '你好小狐狸',
+        expectedBehavior: '不应被识别为名字'
+      }
+    });
+
+    subtasks.push({
+      id: 'diagnose-ws-handler',
+      name: '诊断 WebSocket 消息结构',
+      agentId: 'diagnostic-agent',
+      dependencies: [],
+      priority: 1,
+      input: {
+        target: 'ws-voice-handler.js',
+        expectedFields: ['showHints', 'hints', 'hintLine'],
+        step: 'HELP_REQUEST'
+      }
+    });
+
+    // 阶段2：修复（依赖诊断）
+    subtasks.push({
+      id: 'fix-name-detection',
+      name: '修复名字检测逻辑',
+      agentId: 'fix-agent',
+      dependencies: ['diagnose-name-detection'],
+      priority: 2,
+      input: {
+        target: 'name-processor.js',
+        fixType: 'greeting-prefix-detection'
+      }
+    });
+
+    subtasks.push({
+      id: 'fix-ws-handler',
+      name: '修复 WebSocket 消息结构',
+      agentId: 'fix-agent',
+      dependencies: ['diagnose-ws-handler'],
+      priority: 2,
+      input: {
+        target: 'ws-voice-handler.js',
+        fixType: 'standardize-hint-fields'
+      }
+    });
+
+    // 阶段3：验证（依赖所有修复）
+    subtasks.push({
+      id: 'validate-fix',
+      name: '验证修复结果',
+      agentId: 'validation-agent',
+      dependencies: ['fix-name-detection', 'fix-ws-handler'],
+      priority: 3,
+      input: {
+        testFile: 'issue-23-help-request-hints.test.js',
+        coverageThreshold: 80
+      }
+    });
+
+    return subtasks;
   }
 
   /**
-   * 执行所有任务（自动处理依赖关系）
-   * @param {array} tasks - 任务列表
-   * @returns {Promise<array>} 所有任务结果
+   * 执行任务图（支持并行）
+   * @param {Array} subtasks - 子任务列表
+   * @returns {Promise<object>} 执行结果
    */
-  async function executeTasks(tasks) {
-    progress.total = tasks.length;
-    progress.completed = 0;
-    progress.failed = 0;
-    progress.running = 0;
+  async function executeTaskGraph(subtasks) {
+    const startTime = Date.now();
+    const executionLog = [];
 
-    const results = [];
-    const completedIds = new Set();
-    const remaining = [...tasks];
+    // 按优先级排序
+    const sorted = [...subtasks].sort((a, b) => a.priority - b.priority);
 
-    while (remaining.length > 0) {
-      // 获取当前可执行的任务
-      const executable = getParallelTasks(remaining, completedIds);
-      if (executable.length === 0) {
-        break;
-      }
+    // 分层执行（同层并行）
+    const layers = groupByPriority(sorted);
 
-      // 按优先级排序
-      const sorted = sortByPriority(executable);
+    for (const layer of layers) {
+      const layerStart = Date.now();
+      const executable = layer.filter(t => areDependenciesMet(t, subtasks));
 
-      // 分批执行：每批最多使用可用智能体数量
-      while (sorted.length > 0) {
-        const availableCount = Math.max(1, getAvailableAgentCount());
-        const batch = sorted.splice(0, availableCount);
+      // 并行执行同层任务
+      const layerResults = await Promise.all(
+        executable.map(task => executeSubtask(task))
+      );
 
-        const batchResults = await Promise.all(
-          batch.map(task => executeSingleTask(task))
-        );
+      executionLog.push({
+        priority: layer[0].priority,
+        taskCount: executable.length,
+        durationMs: Date.now() - layerStart,
+        results: layerResults
+      });
 
-        results.push(...batchResults);
-
-        // 标记完成的任务
-        for (const result of batchResults) {
-          if (result.status === TASK_STATUS.COMPLETED) {
-            completedIds.add(result.taskId);
-          }
-        }
-
-        // 从剩余任务中移除已处理的
-        const processedIds = new Set(batch.map(t => t.id));
-        for (let i = remaining.length - 1; i >= 0; i--) {
-          if (processedIds.has(remaining[i].id)) {
-            remaining.splice(i, 1);
-          }
-        }
-      }
+      // 保存状态快照
+      stateSnapshots.push({
+        timestamp: Date.now(),
+        completedTasks: [...tasks.entries()]
+          .filter(([_, t]) => t.state === TASK_STATES.COMPLETED)
+          .map(([id, t]) => ({ id, name: t.name, durationMs: t.durationMs }))
+      });
     }
 
-    return results;
-  }
-
-  /**
-   * 集成所有子任务结果
-   * @param {array} results - 所有任务结果
-   * @returns {object} 集成后的完整结果
-   */
-  function integrateResults(results) {
-    const components = results
-      .filter(r => r.status !== TASK_STATUS.FAILED)
-      .map(r => ({
-        component: r.component,
-        ...(r.html ? { html: r.html } : {}),
-        ...(r.output ? { output: r.output } : {})
-      }));
-
-    const errors = results
-      .filter(r => r.status === TASK_STATUS.FAILED)
-      .map(r => ({ taskId: r.taskId, error: r.error }));
+    const totalDurationMs = Date.now() - startTime;
 
     return {
-      components,
-      errors,
-      totalComponents: components.length,
-      totalErrors: errors.length
+      totalDurationMs,
+      executionLog,
+      results: Object.fromEntries(results),
+      messageLog: messageBus.getMessageLog()
     };
   }
 
   /**
-   * 获取执行进度
-   * @returns {object} 进度信息
+   * 执行单个子任务
    */
-  function getProgress() {
-    return { ...progress };
+  async function executeSubtask(task) {
+    tasks.set(task.id, {
+      id: task.id,
+      name: task.name,
+      state: TASK_STATES.PENDING,
+      createdAt: Date.now()
+    });
+
+    const agent = agents.get(task.agentId);
+    if (!agent) {
+      throw new Error(`智能体 ${task.agentId} 未注册`);
+    }
+
+    messageBus.publish({
+      type: MESSAGE_TYPES.TASK_ASSIGN,
+      from: 'coordinator',
+      to: task.agentId,
+      payload: { taskId: task.id, input: task.input }
+    });
+
+    // 等待任务完成（通过 Promise）
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error(`任务 ${task.id} 超时`));
+      }, 30000);
+
+      const checkComplete = () => {
+        const t = tasks.get(task.id);
+        if (t && t.state === TASK_STATES.COMPLETED) {
+          clearTimeout(timeout);
+          resolve(results.get(task.id));
+        } else if (t && t.state === TASK_STATES.FAILED) {
+          clearTimeout(timeout);
+          reject(new Error(t.error));
+        } else {
+          setTimeout(checkComplete, 10);
+        }
+      };
+      checkComplete();
+    });
+  }
+
+  /**
+   * 按优先级分组
+   */
+  function groupByPriority(subtasks) {
+    const groups = {};
+    for (const task of subtasks) {
+      if (!groups[task.priority]) groups[task.priority] = [];
+      groups[task.priority].push(task);
+    }
+    return Object.values(groups);
+  }
+
+  /**
+   * 检查依赖是否满足
+   */
+  function areDependenciesMet(task, allTasks) {
+    return task.dependencies.every(depId => {
+      const dep = tasks.get(depId);
+      return dep && dep.state === TASK_STATES.COMPLETED;
+    });
+  }
+
+  /**
+   * 获取共享状态（用于智能体间状态同步）
+   */
+  function getSharedState() {
+    return {
+      tasks: Object.fromEntries(tasks),
+      results: Object.fromEntries(results),
+      snapshots: stateSnapshots
+    };
+  }
+
+  /**
+   * 集成所有子任务结果
+   * @param {object} executionResult - 执行结果
+   * @returns {object} 集成后的最终结果
+   */
+  function integrateResults(executionResult) {
+    return {
+      success: true,
+      totalDurationMs: executionResult.totalDurationMs,
+      taskCount: Object.keys(executionResult.results).length,
+      results: executionResult.results,
+      executionLog: executionResult.executionLog,
+      stateSnapshots,
+      messageLog: executionResult.messageLog
+    };
   }
 
   return {
     registerAgent,
-    decompose,
-    getParallelTasks,
-    executeTasks,
+    decomposeTask,
+    executeTaskGraph,
     integrateResults,
-    getProgress
+    getSharedState,
+    messageBus
   };
 }
 
-module.exports = { createCoordinator, TASK_STATUS };
+module.exports = { createCoordinator, TASK_STATES };

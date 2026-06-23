@@ -127,8 +127,23 @@ function createAgent({ name, taskHandler }) {
   return { execute, getInfo, reset };
 }
 
+/**
+ * 安全提取智能体执行结果
+ * 从 agent.execute() 返回的统一结果结构中提取 output，失败时返回 fallback
+ * @param {object} agentResult - 智能体执行结果 { status, output, error, ... }
+ * @param {*} fallback - 失败时的默认值
+ * @returns {*} 智能体输出或默认值
+ */
+function extractAgentOutput(agentResult, fallback) {
+  if (agentResult && agentResult.status === 'success' && agentResult.output) {
+    return agentResult.output;
+  }
+  return fallback;
+}
+
 module.exports = {
   MESSAGE_TYPES,
   createMessage,
-  createAgent
+  createAgent,
+  extractAgentOutput
 };

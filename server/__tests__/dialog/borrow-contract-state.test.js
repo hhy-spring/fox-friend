@@ -139,6 +139,59 @@ describe('借分契约状态机 - Issue #9', () => {
     });
   });
 
+  describe('Issue #24: 从持久化状态恢复（initialRefusalCount / initialState）', () => {
+    test('initialRefusalCount 应让计数器以指定值启动', () => {
+      const state = createBorrowContractState({ initialRefusalCount: 2 });
+      expect(state.getRefusalCount()).toBe(2);
+      // 未达阈值，仍可继续递增触发
+      const result = state.recordRefusal('rebellious');
+      expect(state.getRefusalCount()).toBe(3);
+      expect(state.getCurrentState()).toBe(BORROW_STATES.TRIGGERED);
+      expect(result.currentState).toBe(BORROW_STATES.TRIGGERED);
+    });
+
+    test('initialRefusalCount 达阈值时应立即 shouldTriggerBorrow', () => {
+      const state = createBorrowContractState({ initialRefusalCount: 3 });
+      expect(state.getRefusalCount()).toBe(3);
+      expect(state.shouldTriggerBorrow()).toBe(true);
+    });
+
+    test('initialState 可将状态恢复到 COUNTING', () => {
+      const state = createBorrowContractState({
+        initialRefusalCount: 1,
+        initialState: BORROW_STATES.COUNTING
+      });
+      expect(state.getCurrentState()).toBe(BORROW_STATES.COUNTING);
+      expect(state.getRefusalCount()).toBe(1);
+    });
+
+    test('initialState 恢复到 TRIGGERED 后继续 rebellious 不再递增', () => {
+      const state = createBorrowContractState({
+        initialRefusalCount: 3,
+        initialState: BORROW_STATES.TRIGGERED
+      });
+      expect(state.getCurrentState()).toBe(BORROW_STATES.TRIGGERED);
+      state.recordRefusal('rebellious');
+      expect(state.getRefusalCount()).toBe(3);
+      expect(state.getCurrentState()).toBe(BORROW_STATES.TRIGGERED);
+    });
+
+    test('initialState 恢复到 TRIGGERED 后可直接 acceptContract', () => {
+      const state = createBorrowContractState({
+        initialRefusalCount: 3,
+        initialState: BORROW_STATES.TRIGGERED
+      });
+      state.acceptContract();
+      expect(state.getCurrentState()).toBe(BORROW_STATES.IN_PROGRESS);
+    });
+
+    test('不传初始值时保持原有默认行为（IDLE / 0）', () => {
+      const state = createBorrowContractState();
+      expect(state.getCurrentState()).toBe(BORROW_STATES.IDLE);
+      expect(state.getRefusalCount()).toBe(0);
+    });
+  });
+
   describe('acceptContract - 接受对赌', () => {
     test('TRIGGERED 状态下 acceptContract 转为 IN_PROGRESS', () => {
       const state = createBorrowContractState();

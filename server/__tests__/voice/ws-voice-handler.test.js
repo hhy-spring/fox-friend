@@ -166,3 +166,181 @@ describe('WebSocket语音处理器集成', () => {
     }, 10000);
   });
 });
+
+/**
+ * Issue #21: 每日见面流程触发测试
+ *
+ * 参考PRD §4.2 + §4.5.3 变化一
+ * 参考技术架构文档§六 执行优先级：#7 每日见面开场
+ *
+ * 验证：孩子完成第一次见面后，再次连接应触发每日见面流程，而非重新走第一次见面流程
+ */
+describe('Issue #21: 每日见面流程触发', () => {
+  let server;
+  let wss;
+  let wsUrl;
+  let port;
+  let tmpDir;
+
+  beforeAll((done) => {
+    const os = require('os');
+    const fs = require('fs');
+    const path = require('path');
+
+    // 创建临时存储目录，预置已完成第一次见面的孩子画像
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fox-issue21-'));
+
+    // 写入孩子画像（模拟已完成第一次见面流程）
+    const childId = 'child_daily_001';
+    const profile = {
+      foxName: '闪电',
+      foxNameSource: 'child_named',
+      nickname: '闪电',
+      age: 5,
+      interests: ['恐龙', '赛车'],
+      self_claimed_skills: ['跑步'],
+      saved_at: new Date().toISOString()
+    };
+    fs.writeFileSync(
+      path.join(tmpDir, `profile_${childId}.json`),
+      JSON.stringify(profile, null, 2),
+      'utf8'
+    );
+
+    // 写入上一次会话数据（供回忆锚点引用）
+    const lastSession = {
+      date: '2026-06-20',
+      story_stage: '字母石',
+      subject: 'pinyin',
+      items_learned: ['a'],
+      mastery_status: { a: 'learning' },
+      child_mood: 'happy',
+      chat_frequency: 8,
+      teaching_method_used: 'feynman',
+      duration_minutes: 5,
+      child_spontaneous_remarks: ['我喜欢恐龙'],
+      saved_at: '2026-06-20T10:00:00.000Z'
+    };
+    fs.writeFileSync(
+      path.join(tmpDir, `sessions_${childId}.json`),
+      JSON.stringify([lastSession], null, 2),
+      'utf8'
+    );
+
+    // 创建带存储目录的 WSServer
+    server = http.createServer();
+    port = 9322 + Math.floor(Math.random() * 1000);
+    const { wss: wsServer, handleVoiceConnection } = createWSServer({
+      asrType: 'mock',
+      ttsType: 'mock',
+      storageDir: tmpDir
+    });
+    wss = wsServer;
+
+    wss.on('connection', handleVoiceConnection);
+    server.on('upgrade', (req, socket, head) => {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit('connection', ws, req);
+      });
+    });
+
+    server.listen(port, () => {
+      wsUrl = `ws://localhost:${port}`;
+      done();
+    });
+  });
+
+  afterAll((done) => {
+    wss.close(() => {
+      server.close(() => {
+        // 清理临时目录
+        if (tmpDir && require('fs').existsSync(tmpDir)) {
+          require('fs').rmSync(tmpDir, { recursive: true, force: true });
+        }
+        done();
+      });
+    });
+  });
+
+  test('有画像的孩子再次连接，应触发每日见面开场（非 APPEARANCE）', (done) => {
+    const ws = new WebSocket(`${wsUrl}/ws/voice/child_daily_001`);
+
+    ws.on('message', (data) => {
+      const msg = JSON.parse(data.toString());
+
+      // 跳过 session_start，等待 fox_dialog
+      if (msg.type === 'fox_dialog') {
+        // 关键断言：步骤应为 DAILY_MEETING，而非 APPEARANCE
+        expect(msg.step).toBe('DAILY_MEETING');
+        expect(msg.step).not.toBe('APPEARANCE');
+        ws.close();
+      }
+    });
+
+    ws.on('close', () => {
+      done();
+    });
+
+    ws.on('error', (err) => {
+      done(err);
+    });
+  }, 10000);
+
+  test('无画像的孩子连接，仍走第一次见面流程（APPEARANCE）', (done) => {
+    // 使用未预置画像的 childId
+    const ws = new WebSocket(`${wsUrl}/ws/voice/child_no_profile_002`);
+
+    ws.on('message', (data) => {
+      const msg = JSON.parse(data.toString());
+
+      if (msg.type === 'fox_dialog') {
+        // 回归断言：无画像时仍走 APPEARANCE
+        expect(msg.step).toBe('APPEARANCE');
+        ws.close();
+      }
+    });
+
+    ws.on('close', () => {
+      done();
+    });
+
+    ws.on('error', (err) => {
+      done(err);
+    });
+  }, 10000);
+
+  test('每日见面开场包含点名 + 回忆锚点 + 新任务三组件', (done) => {
+    const ws = new WebSocket(`${wsUrl}/ws/voice/child_daily_001`);
+
+    ws.on('message', (data) => {
+      const msg = JSON.parse(data.toString());
+
+      if (msg.type === 'fox_dialog' && msg.step === 'DAILY_MEETING') {
+        // 断言1：开场文本非空
+        expect(msg.dialog.mainLine).toBeTruthy();
+        expect(msg.dialog.mainLine.length).toBeGreaterThan(0);
+
+        // 断言2：components 三组件存在
+        expect(msg.components).toBeDefined();
+        expect(msg.components.nameCall).toBeDefined();
+        expect(msg.components.newTask).toBeDefined();
+
+        // 断言3：点名包含孩子昵称（画像中 nickname 为 "闪电"）
+        expect(msg.components.nameCall).toContain('闪电');
+
+        // 断言4：新任务非空
+        expect(msg.components.newTask.length).toBeGreaterThan(0);
+
+        ws.close();
+      }
+    });
+
+    ws.on('close', () => {
+      done();
+    });
+
+    ws.on('error', (err) => {
+      done(err);
+    });
+  }, 10000);
+});

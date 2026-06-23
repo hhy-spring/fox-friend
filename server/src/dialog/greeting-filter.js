@@ -80,4 +80,24 @@ function getGreetingPatterns() {
   return [...GREETING_PATTERNS];
 }
 
-module.exports = { isGreeting, getGreetingPatterns, GREETING_PATTERNS };
+/**
+ * 问候语前缀列表（Issue #23: 以这些词开头的输入不应被识别为名字）
+ * 用于检测 "你好小狐狸" 等问候语+内容的组合
+ */
+const GREETING_PREFIXES = [
+  '你好', '嗨', '哈喽', '哈罗', '早上好', '下午好', '晚上好', '早安', '晚安'
+];
+
+/**
+ * 检测输入是否以问候语前缀开头
+ * Issue #23: "你好小狐狸" 等问候语+内容的组合不应被识别为名字
+ * @param {string} content - 输入内容
+ * @returns {boolean}
+ */
+function hasGreetingPrefix(content) {
+  if (!content || content.trim().length === 0) return false;
+  const trimmed = content.trim();
+  return GREETING_PREFIXES.some(g => trimmed.startsWith(g));
+}
+
+module.exports = { isGreeting, getGreetingPatterns, GREETING_PATTERNS, hasGreetingPrefix, GREETING_PREFIXES };

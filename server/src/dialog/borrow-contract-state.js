@@ -41,12 +41,15 @@ const CONTRACT_OUTCOMES = {
  * 创建借分契约状态机
  * @param {object} [options]
  * @param {number} [options.threshold=3] - 触发借分契约的阈值
+ * @param {number} [options.initialRefusalCount=0] - 初始不愿推进计数（用于从持久化状态恢复，Issue #24 跨会话触发）
+ * @param {string} [options.initialState=IDLE] - 初始状态（用于从持久化状态恢复）
  * @returns {object} 状态机实例
  */
 function createBorrowContractState(options = {}) {
   const threshold = options.threshold || 3;
-  let currentState = BORROW_STATES.IDLE;
-  let refusalCount = 0;
+  // Issue #24：支持从持久化状态恢复，使拒绝计数可跨会话累积（3 次连续会议 → 第 4 次触发）
+  let currentState = options.initialState || BORROW_STATES.IDLE;
+  let refusalCount = options.initialRefusalCount || 0;
 
   return {
     getCurrentState() {

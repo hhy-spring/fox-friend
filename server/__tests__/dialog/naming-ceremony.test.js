@@ -3,6 +3,7 @@ const {
   SKIP_PATTERNS,
   isSkipAnswer,
   extractAge,
+  extractNickname,
   extractInterests,
   createNamingCeremony
 } = require('../../src/dialog/naming-ceremony');
@@ -235,6 +236,31 @@ describe('命名仪式 - 崇拜式回应与画像采集', () => {
     });
   });
 
+  // ===== 切片10b: extractNickname 从回答中提取昵称 =====
+  describe('昵称提取 - extractNickname', () => {
+    test('从"我叫闪电"中提取"闪电"', () => {
+      expect(extractNickname('我叫闪电')).toBe('闪电');
+    });
+
+    test('从"我是小明"中提取"小明"', () => {
+      expect(extractNickname('我是小明')).toBe('小明');
+    });
+
+    test('直接说名字"豆豆"保留原值', () => {
+      expect(extractNickname('豆豆')).toBe('豆豆');
+    });
+
+    test('跳过回答返回null', () => {
+      expect(extractNickname('不知道')).toBeNull();
+      expect(extractNickname('')).toBeNull();
+      expect(extractNickname(null)).toBeNull();
+    });
+
+    test('带空格的"我叫 闪电"提取"闪电"', () => {
+      expect(extractNickname('我叫 闪电')).toBe('闪电');
+    });
+  });
+
   // ===== 切片12: extractInterests =====
   describe('兴趣提取 - extractInterests', () => {
     test('单个兴趣返回数组', () => {
@@ -284,7 +310,8 @@ describe('命名仪式 - 崇拜式回应与画像采集', () => {
       ceremony.processAnswer('画画');   // → ASK_SKILLS
       const result = ceremony.processAnswer('跑步很快');
       expect(result.field).toBe('selfClaimedSkills');
-      expect(result.value).toBe('跑步很快');
+      // Issue #19: selfClaimedSkills 改为数组格式
+      expect(result.value).toEqual(['跑步很快']);
       expect(result.nextSubState).toBe(CEREMONY_SUB_STATES.COMPLETE);
     });
   });
@@ -305,7 +332,8 @@ describe('命名仪式 - 崇拜式回应与画像采集', () => {
       expect(profile.nickname).toBe('小明');
       expect(profile.age).toBe(5);
       expect(profile.interests).toEqual(['画画', '唱歌']);
-      expect(profile.selfClaimedSkills).toBe('跑步很快');
+      // Issue #19: selfClaimedSkills 改为数组格式
+      expect(profile.selfClaimedSkills).toEqual(['跑步很快']);
     });
 
     test('foxName 和 foxNameSource 正确填写', () => {
@@ -327,7 +355,8 @@ describe('命名仪式 - 崇拜式回应与画像采集', () => {
       expect(profile.nickname).toBeNull();
       expect(profile.age).toBe(5);
       expect(profile.interests).toEqual(['画画']);
-      expect(profile.selfClaimedSkills).toBe('跑步');
+      // Issue #19: selfClaimedSkills 改为数组格式
+      expect(profile.selfClaimedSkills).toEqual(['跑步']);
     });
   });
 

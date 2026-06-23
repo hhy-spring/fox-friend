@@ -12,38 +12,57 @@
  * 性能优化：Phase 1 使用 Promise.all 并行执行，比串行方案提升约 50%
  */
 
-const { createAgent } = require('./agent-base');
+const { createAgent, extractAgentOutput } = require('./agent-base');
 const { createStoryStageManager, STORY_STAGES } = require('./story-stage-manager');
 const { createToneEvolutionManager } = require('./tone-evolution');
 const { createMemoryAnchorGenerator } = require('./memory-anchor');
 const { createOpeningTemplateGenerator } = require('./opening-templates');
+const { createFreshnessOrchestrator } = require('./freshness-orchestrator');
 
 /**
- * 安全提取智能体执行结果
- * @param {object} agentResult - 智能体执行结果
- * @param {*} fallback - 失败时的默认值
- * @returns {*} 智能体输出或默认值
+ * 生成 freshness 内容并集成到开场文本
+ * Issue #25: 将关系保鲜机制文本嵌入 openingText
+ *
+ * @param {object} params
+ * @param {object} params.freshnessOrchestrator - 关系保鲜编排器实例
+ * @param {string} params.childId - 孩子 ID
+ * @param {object} params.childProfile - 孩子画像
+ * @param {number} params.sessionCount - 当前会话序号
+ * @param {string} params.baseOpeningText - 基础开场文本（不含 freshness）
+ * @returns {Promise<{ freshness: object, integratedOpeningText: string }>}
  */
-function extractAgentOutput(agentResult, fallback) {
-  if (agentResult && agentResult.status === 'success' && agentResult.output) {
-    return agentResult.output;
-  }
-  return fallback;
+async function generateFreshnessAndIntegrate({ freshnessOrchestrator, childId, childProfile, sessionCount, baseOpeningText }) {
+  const freshness = await freshnessOrchestrator.generateFreshness({
+    childId,
+    childProfile,
+    sessionCount,
+    usedExposures: (childProfile && childProfile.usedExposures) || []
+  });
+
+  // PRD §4.4: 所有保鲜机制嵌入在对话开场或结尾
+  const freshnessText = freshness.freshnessText || '';
+  const integratedOpeningText = freshnessText
+    ? `${baseOpeningText}${freshnessText}`
+    : baseOpeningText;
+
+  return { freshness, integratedOpeningText };
 }
 
 /**
  * 创建每日见面开场编排器
  * @param {object} options
  * @param {object} options.sessionStateManager - 会话状态管理器实例
+ * @param {function} [options.rng] - 随机数生成器（用于测试确定性）
  * @returns {object} 编排器实例
  */
 function createDailyMeetingOrchestrator(options = {}) {
-  const { sessionStateManager } = options;
+  const { sessionStateManager, rng } = options;
 
   // 创建各模块实例
   const toneEvolutionManager = createToneEvolutionManager();
   const memoryAnchorGenerator = createMemoryAnchorGenerator();
   const openingTemplateGenerator = createOpeningTemplateGenerator();
+  const freshnessOrchestrator = createFreshnessOrchestrator({ sessionStateManager, rng });
 
   // 创建 5 个智能体（基于 agent-base 通信协议）
   const agents = {
@@ -204,15 +223,26 @@ function createDailyMeetingOrchestrator(options = {}) {
         };
       }
 
+      // Issue #25: 关系保鲜机制集成
+      const freshnessResult = await generateFreshnessAndIntegrate({
+        freshnessOrchestrator,
+        childId,
+        childProfile: profile,
+        sessionCount,
+        baseOpeningText: openingResult.output.openingText
+      });
+
       return {
-        openingText: openingResult.output.openingText,
+        openingText: freshnessResult.integratedOpeningText,
         components: openingResult.output.components,
         storyStage,
         tonePhase,
         memoryAnchor,
         executionTime: elapsed,
         agentResults,
-        phase1Errors: phase1Errors.length > 0 ? phase1Errors : undefined
+        phase1Errors: phase1Errors.length > 0 ? phase1Errors : undefined,
+        // Issue #10/#25: 关系保鲜机制集成
+        freshness: freshnessResult.freshness
       };
     } catch (err) {
       return {

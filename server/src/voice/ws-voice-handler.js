@@ -209,19 +209,27 @@ function createWSServer(options = {}) {
             content: payload?.content || ''
           });
 
-          ws.send(JSON.stringify({
+          // Issue #23: 标准化消息构造，确保 hint 字段正确输出
+          const message = {
             type: 'fox_dialog',
             step: result.nextState,
             dialog: result.dialog,
-            ...result.nameRecorded !== undefined && {
-              nameRecorded: result.nameRecorded,
-              foxName: result.foxName,
-              showHints: result.showHints,
-              hints: result.hints,
-              hintLine: result.hintLine
-            },
             stepInfo: result.stepInfo
-          }));
+          };
+
+          // 当 nameRecorded 已定义时，包含名字相关字段
+          if (result.nameRecorded !== undefined) {
+            message.nameRecorded = result.nameRecorded;
+            if (result.foxName !== undefined) message.foxName = result.foxName;
+            if (result.nameSource !== undefined) message.nameSource = result.nameSource;
+          }
+
+          // hint 相关字段：当存在时始终包含
+          if (result.showHints !== undefined) message.showHints = result.showHints;
+          if (result.hints !== undefined) message.hints = result.hints;
+          if (result.hintLine !== undefined) message.hintLine = result.hintLine;
+
+          ws.send(JSON.stringify(message));
         } catch (err) {
           ws.send(JSON.stringify({ type: 'error', message: err.message }));
         }

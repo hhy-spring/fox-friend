@@ -21,6 +21,9 @@ const { createSessionManager, handleVoiceMessage } = require('./session-manager'
 const { detectReaction, getStepDialog, REACTION_TYPES } = require('../dialog/dialog-engine');
 const { getNameHints, getNameHintsLine } = require('../dialog/name-hints');
 const { processChildInput } = require('../dialog/name-processor');
+const { loadProfile } = require('../dialog/profile-persistence');
+const { createSessionStateManager } = require('../dialog/session-state');
+const { createDailyMeetingOrchestrator } = require('../dialog/daily-meeting-orchestrator');
 // Issue #24：借分契约机制接入 WebSocket 流
 const { createBorrowContractPersistence } = require('../dialog/borrow-contract-persistence');
 const { createBorrowContractState, BORROW_STATES } = require('../dialog/borrow-contract-state');
@@ -64,12 +67,17 @@ function classifyRefusalType(text) {
  * @param {object} options
  * @param {string} options.asrType - ASR引擎类型
  * @param {string} options.ttsType - TTS引擎类型
+ * @param {string} [options.storageDir] - 存储目录，用于读取孩子画像和会话历史
  * @returns {{wss: WebSocketServer, handleVoiceConnection: function, pipelines: Map}}
  */
 function createWSServer(options = {}) {
   const wss = new WebSocketServer({ noServer: true });
   const pipelines = new Map();
   const sessionManager = createSessionManager();
+  const storageDir = options.storageDir;
+  const sessionStateManager = storageDir
+    ? createSessionStateManager({ storageDir })
+    : null;
 
   // Issue #24：借分契约依赖注入（支持持久化与编排器工厂注入，便于测试）
   const borrowPersistence = options.borrowPersistence || createBorrowContractPersistence(
@@ -200,25 +208,19 @@ function createWSServer(options = {}) {
     const pipeline = createPipelineForChild(childId);
     pipelines.set(session.id, pipeline);
 
-    // 发送初始状态
-    ws.send(JSON.stringify({
-      type: 'session_start',
-      sessionId: session.id,
-      stepInfo: session.fsm.getStepInfo()
-    }));
+    // Issue #21: 检查孩子是否已完成第一次见面（有已保存画像）
+    // 有画像 → 触发每日见面流程；无画像 → 走第一次见面流程
+    const profileResult = storageDir
+      ? loadProfile(childId, { storageDir })
+      : { success: false };
 
-    // 自动触发步骤1出场台词
-    const appearanceDialog = getStepDialog('APPEARANCE', REACTION_TYPES.QUICK);
-    ws.send(JSON.stringify({
-      type: 'fox_dialog',
-      step: 'APPEARANCE',
-      dialog: appearanceDialog,
-      stepInfo: session.fsm.getStepInfo()
-    }));
-
-    // Issue #22 修复：不再在此处提前转换到 HELP_REQUEST
-    // 保留 APPEARANCE 状态，等待孩子的第一条反应（HESITANT/SILENT/QUICK），
-    // 由 handleVoiceMessage 的 APPEARANCE 分支根据实际反应返回正确的 followUp 台词后再转换
+    if (profileResult.success) {
+      // 已有画像 → 触发每日见面开场
+      handleDailyMeetingConnection(ws, session, childId, profileResult.profile);
+    } else {
+      // 无画像 → 第一次见面流程
+      handleFirstMeetingConnection(ws, session);
+    }
 
     // 监听管道事件
     pipeline.on(PIPELINE_EVENTS.INTERRUPTED, () => {
@@ -250,6 +252,100 @@ function createWSServer(options = {}) {
     ws.on('error', (err) => {
       console.error('语音WebSocket错误:', err.message);
     });
+  }
+
+  /**
+   * 处理第一次见面连接（无画像）
+   * 发送 session_start + 自动触发步骤1出场台词
+   * @param {WebSocket} ws
+   * @param {object} session - 会话对象
+   */
+  function handleFirstMeetingConnection(ws, session) {
+    // 发送初始状态
+    ws.send(JSON.stringify({
+      type: 'session_start',
+      sessionId: session.id,
+      stepInfo: session.fsm.getStepInfo()
+    }));
+
+    // 自动触发步骤1出场台词
+    const appearanceDialog = getStepDialog('APPEARANCE', REACTION_TYPES.QUICK);
+    ws.send(JSON.stringify({
+      type: 'fox_dialog',
+      step: 'APPEARANCE',
+      dialog: appearanceDialog,
+      stepInfo: session.fsm.getStepInfo()
+    }));
+
+    // Issue #22 修复：不再在此处提前转换到 HELP_REQUEST
+    // 保留 APPEARANCE 状态，等待孩子的第一条反应（HESITANT/SILENT/QUICK），
+    // 由 handleVoiceMessage 的 APPEARANCE 分支根据实际反应返回正确的 followUp 台词后再转换
+  }
+
+  /**
+   * 处理每日见面连接（有画像，Issue #21）
+   * 使用 daily-meeting-orchestrator 生成开场，发送 DAILY_MEETING 状态
+   * @param {WebSocket} ws
+   * @param {object} session - 会话对象
+   * @param {string} childId - 孩子 ID
+   * @param {object} childProfile - 孩子画像
+   */
+  async function handleDailyMeetingConnection(ws, session, childId, childProfile) {
+    // 标记会话为每日见面模式
+    session.isDailyMeeting = true;
+    session.childProfile = childProfile;
+
+    // 发送初始状态
+    ws.send(JSON.stringify({
+      type: 'session_start',
+      sessionId: session.id,
+      stepInfo: { state: 'DAILY_MEETING', currentStep: 0, description: '每日见面' }
+    }));
+
+    try {
+      // 使用每日见面编排器生成开场
+      const orchestrator = createDailyMeetingOrchestrator({ sessionStateManager });
+      const sessionCount = sessionStateManager
+        ? sessionStateManager.getSessionCount(childId) + 1
+        : 1;
+
+      const result = await orchestrator.generateDailyOpening({
+        childId,
+        childProfile,
+        sessionCount
+      });
+
+      if (result.error) {
+        // 降级：出错时仍发送开场文本
+        ws.send(JSON.stringify({
+          type: 'fox_dialog',
+          step: 'DAILY_MEETING',
+          dialog: { mainLine: `${childProfile.nickname || '小伙伴'}！快过来，我发现了一件事！`, followUp: null },
+          stepInfo: { state: 'DAILY_MEETING', currentStep: 0, description: '每日见面' },
+          error: result.error
+        }));
+      } else {
+        ws.send(JSON.stringify({
+          type: 'fox_dialog',
+          step: 'DAILY_MEETING',
+          dialog: { mainLine: result.openingText, followUp: null },
+          stepInfo: { state: 'DAILY_MEETING', currentStep: 0, description: '每日见面' },
+          components: result.components,
+          storyStage: result.storyStage,
+          tonePhase: result.tonePhase,
+          memoryAnchor: result.memoryAnchor
+        }));
+      }
+    } catch (err) {
+      // 降级：异常时发送简单开场
+      ws.send(JSON.stringify({
+        type: 'fox_dialog',
+        step: 'DAILY_MEETING',
+        dialog: { mainLine: `${childProfile.nickname || '小伙伴'}！快过来，我发现了一件事！`, followUp: null },
+        stepInfo: { state: 'DAILY_MEETING', currentStep: 0, description: '每日见面' },
+        error: err.message
+      }));
+    }
   }
 
   /**

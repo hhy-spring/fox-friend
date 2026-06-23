@@ -12,24 +12,12 @@
  * 性能优化：Phase 1 使用 Promise.all 并行执行，比串行方案提升约 50%
  */
 
-const { createAgent } = require('./agent-base');
+const { createAgent, extractAgentOutput } = require('./agent-base');
 const { createStoryStageManager, STORY_STAGES } = require('./story-stage-manager');
 const { createToneEvolutionManager } = require('./tone-evolution');
 const { createMemoryAnchorGenerator } = require('./memory-anchor');
 const { createOpeningTemplateGenerator } = require('./opening-templates');
-
-/**
- * 安全提取智能体执行结果
- * @param {object} agentResult - 智能体执行结果
- * @param {*} fallback - 失败时的默认值
- * @returns {*} 智能体输出或默认值
- */
-function extractAgentOutput(agentResult, fallback) {
-  if (agentResult && agentResult.status === 'success' && agentResult.output) {
-    return agentResult.output;
-  }
-  return fallback;
-}
+const { createFreshnessOrchestrator } = require('./freshness-orchestrator');
 
 /**
  * 创建每日见面开场编排器
@@ -44,6 +32,7 @@ function createDailyMeetingOrchestrator(options = {}) {
   const toneEvolutionManager = createToneEvolutionManager();
   const memoryAnchorGenerator = createMemoryAnchorGenerator();
   const openingTemplateGenerator = createOpeningTemplateGenerator();
+  const freshnessOrchestrator = createFreshnessOrchestrator({ sessionStateManager });
 
   // 创建 5 个智能体（基于 agent-base 通信协议）
   const agents = {
@@ -212,7 +201,14 @@ function createDailyMeetingOrchestrator(options = {}) {
         memoryAnchor,
         executionTime: elapsed,
         agentResults,
-        phase1Errors: phase1Errors.length > 0 ? phase1Errors : undefined
+        phase1Errors: phase1Errors.length > 0 ? phase1Errors : undefined,
+        // Issue #10: 关系保鲜机制集成
+        freshness: await freshnessOrchestrator.generateFreshness({
+          childId,
+          childProfile: profile,
+          sessionCount,
+          usedExposures: (profile && profile.usedExposures) || []
+        })
       };
     } catch (err) {
       return {

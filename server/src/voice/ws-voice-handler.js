@@ -24,6 +24,43 @@ const { processChildInput } = require('../dialog/name-processor');
 const { loadProfile } = require('../dialog/profile-persistence');
 const { createSessionStateManager } = require('../dialog/session-state');
 const { createDailyMeetingOrchestrator } = require('../dialog/daily-meeting-orchestrator');
+// Issue #24：借分契约机制接入 WebSocket 流
+const { createBorrowContractPersistence } = require('../dialog/borrow-contract-persistence');
+const { createBorrowContractState, BORROW_STATES } = require('../dialog/borrow-contract-state');
+const { createBorrowContractOrchestrator } = require('../dialog/borrow-contract-orchestrator');
+const { classifyChildState, CHILD_STATES } = require('../dialog/child-state-classifier');
+const { findMatchedKeyword } = require('../dialog/keyword-matcher');
+
+// Issue #24：low 状态下进一步区分「累了」与「畏难」，喂给 borrow-contract-state.recordRefusal
+const TIRED_KEYWORDS = ['累了', '困了', '不想玩', '难过'];
+const DIFFICULT_KEYWORDS = ['太难', '不会', '不懂', '不开心'];
+
+/**
+ * 统一发送错误响应（标准化错误处理，消除重复的 ws.send(JSON.stringify({type:'error',...})) ）
+ * @param {WebSocket} ws
+ * @param {string} message - 错误信息
+ */
+function sendError(ws, message) {
+  ws.send(JSON.stringify({ type: 'error', message }));
+}
+
+/**
+ * 将孩子的文本反应映射为借分契约的 refusalType
+ * @param {string} text - 孩子文本
+ * @returns {'rebellious'|'tired'|'difficult'|'neutral'}
+ */
+function classifyRefusalType(text) {
+  const t = (text || '').trim();
+  if (!t) return 'neutral';
+  const classification = classifyChildState(t);
+  if (classification.state === CHILD_STATES.REBELLIOUS) return 'rebellious';
+  if (classification.state === CHILD_STATES.LOW) {
+    if (findMatchedKeyword(t, TIRED_KEYWORDS)) return 'tired';
+    if (findMatchedKeyword(t, DIFFICULT_KEYWORDS)) return 'difficult';
+    return 'tired';
+  }
+  return 'neutral';
+}
 
 /**
  * 创建WebSocket语音服务器
@@ -41,6 +78,62 @@ function createWSServer(options = {}) {
   const sessionStateManager = storageDir
     ? createSessionStateManager({ storageDir })
     : null;
+
+  // Issue #24：借分契约依赖注入（支持持久化与编排器工厂注入，便于测试）
+  const borrowPersistence = options.borrowPersistence || createBorrowContractPersistence(
+    options.borrowStorageDir ? { storageDir: options.borrowStorageDir } : {}
+  );
+  const borrowThreshold = options.borrowThreshold || 3;
+  const createBorrowState = options.createBorrowState || createBorrowContractState;
+  const createBorrowOrchestrator = options.createBorrowOrchestrator || createBorrowContractOrchestrator;
+
+  /**
+   * 为会话获取或创建借分契约编排器（从持久化状态恢复，实现跨会话累积）
+   * @param {object} session - 会话对象
+   * @returns {{ orchestrator: object, childId: string }}
+   */
+  function getOrCreateBorrowContract(session) {
+    if (session.borrowContract) return session.borrowContract;
+    const childId = session.childId;
+    const persisted = borrowPersistence.loadState(childId);
+    const borrowState = createBorrowState({
+      threshold: borrowThreshold,
+      initialRefusalCount: persisted ? persisted.refusalCount : 0,
+      initialState: persisted ? persisted.currentState : BORROW_STATES.IDLE
+    });
+    const orchestrator = createBorrowOrchestrator({ threshold: borrowThreshold, borrowState });
+    session.borrowContract = { orchestrator, childId };
+    return session.borrowContract;
+  }
+
+  /**
+   * 持久化当前借分契约状态（跨会话累积拒绝计数）
+   * @param {object} session - 会话对象
+   */
+  function persistBorrow(session) {
+    if (!session.borrowContract) return;
+    const { orchestrator, childId } = session.borrowContract;
+    const status = orchestrator.getContractStatus();
+    borrowPersistence.saveState(childId, {
+      refusalCount: status.refusalCount,
+      currentState: status.currentState
+    });
+  }
+
+  /**
+   * 统一获取会话并校验存在性（消除 borrow_* case 中重复的 session 获取与错误响应）
+   * @param {WebSocket} ws
+   * @param {string} sessionId
+   * @returns {object|null} session 对象；若不存在已发送 error 并返回 null
+   */
+  function getSessionOrError(ws, sessionId) {
+    const session = sessionManager.getSession(sessionId);
+    if (!session) {
+      sendError(ws, `会话 ${sessionId} 不存在`);
+      return null;
+    }
+    return session;
+  }
 
   /**
    * 为新连接创建语音管道
@@ -147,7 +240,7 @@ function createWSServer(options = {}) {
         const message = JSON.parse(data.toString());
         await handleWSMessage(ws, session.id, pipeline, message);
       } catch (err) {
-        ws.send(JSON.stringify({ type: 'error', message: err.message }));
+        sendError(ws, err.message);
       }
     });
 
@@ -184,8 +277,9 @@ function createWSServer(options = {}) {
       stepInfo: session.fsm.getStepInfo()
     }));
 
-    // 转换到 HELP_REQUEST
-    sessionManager.updateState(session.id, 'HELP_REQUEST');
+    // Issue #22 修复：不再在此处提前转换到 HELP_REQUEST
+    // 保留 APPEARANCE 状态，等待孩子的第一条反应（HESITANT/SILENT/QUICK），
+    // 由 handleVoiceMessage 的 APPEARANCE 分支根据实际反应返回正确的 followUp 台词后再转换
   }
 
   /**
@@ -269,7 +363,7 @@ function createWSServer(options = {}) {
         // 处理音频数据
         const audioBase64 = payload?.audio;
         if (!audioBase64) {
-          ws.send(JSON.stringify({ type: 'error', message: '缺少音频数据' }));
+          sendError(ws, '缺少音频数据');
           return;
         }
 
@@ -290,7 +384,7 @@ function createWSServer(options = {}) {
             }));
           }
         } catch (err) {
-          ws.send(JSON.stringify({ type: 'error', message: err.message }));
+          sendError(ws, err.message);
         }
         break;
       }
@@ -304,21 +398,29 @@ function createWSServer(options = {}) {
             content: payload?.content || ''
           });
 
-          ws.send(JSON.stringify({
+          // Issue #23: 标准化消息构造，确保 hint 字段正确输出
+          const message = {
             type: 'fox_dialog',
             step: result.nextState,
             dialog: result.dialog,
-            ...result.nameRecorded !== undefined && {
-              nameRecorded: result.nameRecorded,
-              foxName: result.foxName,
-              showHints: result.showHints,
-              hints: result.hints,
-              hintLine: result.hintLine
-            },
             stepInfo: result.stepInfo
-          }));
+          };
+
+          // 当 nameRecorded 已定义时，包含名字相关字段
+          if (result.nameRecorded !== undefined) {
+            message.nameRecorded = result.nameRecorded;
+            if (result.foxName !== undefined) message.foxName = result.foxName;
+            if (result.nameSource !== undefined) message.nameSource = result.nameSource;
+          }
+
+          // hint 相关字段：当存在时始终包含
+          if (result.showHints !== undefined) message.showHints = result.showHints;
+          if (result.hints !== undefined) message.hints = result.hints;
+          if (result.hintLine !== undefined) message.hintLine = result.hintLine;
+
+          ws.send(JSON.stringify(message));
         } catch (err) {
-          ws.send(JSON.stringify({ type: 'error', message: err.message }));
+          sendError(ws, err.message);
         }
         break;
       }
@@ -344,8 +446,157 @@ function createWSServer(options = {}) {
         break;
       }
 
+      // ===== Issue #24：借分契约机制接入 WebSocket 流 =====
+      case 'borrow_status': {
+        try {
+          const session = getSessionOrError(ws, sessionId);
+          if (!session) return;
+          const bc = getOrCreateBorrowContract(session);
+          const status = bc.orchestrator.getContractStatus();
+          ws.send(JSON.stringify({
+            type: 'borrow_status',
+            refusalCount: status.refusalCount,
+            currentState: status.currentState,
+            shouldTriggerBorrow: status.shouldTriggerBorrow,
+            borrowPoints: status.borrowPoints,
+            winPoints: status.winPoints
+          }));
+        } catch (err) {
+          sendError(ws, err.message);
+        }
+        break;
+      }
+
+      case 'borrow_response': {
+        try {
+          const session = getSessionOrError(ws, sessionId);
+          if (!session) return;
+          const bc = getOrCreateBorrowContract(session);
+          const status = bc.orchestrator.getContractStatus();
+
+          // 已达阈值（跨会话恢复或本会话累计）→ 直接触发契约提案（第 4 次会议语义）
+          if (status.shouldTriggerBorrow) {
+            const proposal = bc.orchestrator.triggerContract();
+            ws.send(JSON.stringify({
+              type: 'borrow_contract_proposal',
+              dialogue: proposal.dialogue,
+              borrowPoints: proposal.borrowPoints,
+              winPoints: proposal.winPoints,
+              refusalCount: status.refusalCount
+            }));
+            return;
+          }
+
+          const refusalType = classifyRefusalType(payload?.content);
+          if (refusalType === 'neutral') {
+            ws.send(JSON.stringify({
+              type: 'borrow_state_update',
+              refusalCount: status.refusalCount,
+              currentState: status.currentState,
+              shouldTriggerBorrow: false
+            }));
+            return;
+          }
+
+          const result = await bc.orchestrator.processChildResponse(refusalType);
+          persistBorrow(session);
+
+          if (result.shouldTriggerBorrow) {
+            const proposal = bc.orchestrator.triggerContract();
+            ws.send(JSON.stringify({
+              type: 'borrow_contract_proposal',
+              dialogue: proposal.dialogue,
+              borrowPoints: proposal.borrowPoints,
+              winPoints: proposal.winPoints,
+              refusalCount: result.refusalCount
+            }));
+          } else {
+            ws.send(JSON.stringify({
+              type: 'borrow_state_update',
+              refusalCount: result.refusalCount,
+              currentState: result.currentState,
+              shouldTriggerBorrow: false,
+              shouldEndSession: result.shouldEndSession || false,
+              shouldReduceDifficulty: result.shouldReduceDifficulty || false
+            }));
+          }
+        } catch (err) {
+          sendError(ws, err.message);
+        }
+        break;
+      }
+
+      case 'borrow_accept': {
+        try {
+          const session = getSessionOrError(ws, sessionId);
+          if (!session) return;
+          const bc = getOrCreateBorrowContract(session);
+          const result = bc.orchestrator.acceptContract();
+          persistBorrow(session);
+          ws.send(JSON.stringify({ type: 'borrow_contract_accepted', dialogue: result.dialogue }));
+        } catch (err) {
+          sendError(ws, err.message);
+        }
+        break;
+      }
+
+      case 'borrow_reject': {
+        try {
+          const session = getSessionOrError(ws, sessionId);
+          if (!session) return;
+          const bc = getOrCreateBorrowContract(session);
+          const result = bc.orchestrator.rejectContract();
+          persistBorrow(session);
+          ws.send(JSON.stringify({
+            type: 'borrow_contract_rejected',
+            dialogue: result.dialogue,
+            refusalCount: bc.orchestrator.getContractStatus().refusalCount
+          }));
+        } catch (err) {
+          sendError(ws, err.message);
+        }
+        break;
+      }
+
+      case 'borrow_complete': {
+        try {
+          const session = getSessionOrError(ws, sessionId);
+          if (!session) return;
+          const bc = getOrCreateBorrowContract(session);
+          const result = await bc.orchestrator.completeContract(payload?.outcome);
+          // 对赌结束后重置计数器，开启新一轮追踪
+          bc.orchestrator.reset();
+          persistBorrow(session);
+          ws.send(JSON.stringify({
+            type: 'borrow_contract_completed',
+            outcome: result.outcome,
+            dialogue: result.dialogue,
+            points: result.points,
+            storyUnlocked: result.storyUnlocked || false,
+            funnyTask: result.funnyTask || null
+          }));
+        } catch (err) {
+          sendError(ws, err.message);
+        }
+        break;
+      }
+
+      case 'borrow_changed_mind': {
+        try {
+          const session = getSessionOrError(ws, sessionId);
+          if (!session) return;
+          const bc = getOrCreateBorrowContract(session);
+          const result = bc.orchestrator.handleChangedMind();
+          persistBorrow(session);
+          ws.send(JSON.stringify({ type: 'borrow_contract_changed_mind', dialogue: result.dialogue }));
+        } catch (err) {
+          sendError(ws, err.message);
+        }
+        break;
+      }
+
       default:
-        ws.send(JSON.stringify({ type: 'error', message: `未知消息类型: ${type}` }));
+        sendError(ws, `未知消息类型: ${type}`);
     }
   }
 

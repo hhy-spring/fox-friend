@@ -18,6 +18,23 @@ const NON_NAME_PATTERNS = [
   '不要', '不想', '没有', '什么', '为什么', '怎么'
 ];
 
+// 问候语前缀（Issue #23: 以这些词开头的输入不应被识别为名字）
+const GREETING_PREFIXES = [
+  '你好', '嗨', '哈喽', '哈罗', '早上好', '下午好', '晚上好', '早安', '晚安'
+];
+
+/**
+ * 检测输入是否以问候语前缀开头
+ * Issue #23: "你好小狐狸" 等问候语+内容的组合不应被识别为名字
+ * @param {string} content - 输入内容
+ * @returns {boolean}
+ */
+function hasGreetingPrefix(content) {
+  if (!content || content.trim().length === 0) return false;
+  const trimmed = content.trim();
+  return GREETING_PREFIXES.some(g => trimmed.startsWith(g));
+}
+
 /**
  * 判断孩子是否提供了名字
  * @param {string} content - 孩子说的内容
@@ -35,6 +52,12 @@ function isNameProvided(content) {
 
   // Issue #17: 排除问候语（你好、嗨、哈喽等不应被识别为名字）
   if (isGreeting(trimmed)) {
+    return false;
+  }
+
+  // Issue #23: 排除问候语前缀+内容的组合（如"你好小狐狸"不是名字）
+  // 纯问候语已被 isGreeting 过滤，此处处理问候语+其他内容的情况
+  if (hasGreetingPrefix(trimmed) && !isGreeting(trimmed)) {
     return false;
   }
 
@@ -63,6 +86,11 @@ function extractName(content) {
 
   // Issue #17: 问候语不提取为名字
   if (isGreeting(trimmed)) {
+    return null;
+  }
+
+  // Issue #23: 问候语前缀+内容的组合不提取为名字
+  if (hasGreetingPrefix(trimmed) && !isGreeting(trimmed)) {
     return null;
   }
 

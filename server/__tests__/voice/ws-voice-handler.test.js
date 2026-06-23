@@ -165,6 +165,90 @@ describe('WebSocket语音处理器集成', () => {
       });
     }, 10000);
   });
+
+  describe('Issue #22: HESITANT/SILENT 反应的 followUp 台词', () => {
+    test('HESITANT 反应 → followUp 返回「你听见我说话了吗？」', (done) => {
+      const ws = new WebSocket(`${wsUrl}/ws/voice/child_issue22_hesitant`);
+      let foxDialogCount = 0;
+
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+
+        if (msg.type === 'fox_dialog') {
+          foxDialogCount++;
+          if (foxDialogCount === 1) {
+            // 初始 APPEARANCE 台词，发送 HESITANT 反应
+            ws.send(JSON.stringify({
+              type: 'child_response',
+              payload: {
+                responseTimeMs: 2000,
+                content: ''
+              }
+            }));
+            return;
+          }
+          // 对 child_response 的响应
+          try {
+            expect(msg.dialog).toBeTruthy();
+            expect(msg.dialog.followUp).toBe('你听见我说话了吗？');
+            ws.close();
+          } catch (err) {
+            ws.close();
+            done(err);
+          }
+        }
+      });
+
+      ws.on('close', () => {
+        done();
+      });
+
+      ws.on('error', (err) => {
+        done(err);
+      });
+    }, 10000);
+
+    test('SILENT 反应 → followUp 返回害羞台词', (done) => {
+      const ws = new WebSocket(`${wsUrl}/ws/voice/child_issue22_silent`);
+      let foxDialogCount = 0;
+
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+
+        if (msg.type === 'fox_dialog') {
+          foxDialogCount++;
+          if (foxDialogCount === 1) {
+            // 初始 APPEARANCE 台词，发送 SILENT 反应
+            ws.send(JSON.stringify({
+              type: 'child_response',
+              payload: {
+                responseTimeMs: 4000,
+                content: ''
+              }
+            }));
+            return;
+          }
+          // 对 child_response 的响应
+          try {
+            expect(msg.dialog).toBeTruthy();
+            expect(msg.dialog.followUp).toContain('害羞');
+            ws.close();
+          } catch (err) {
+            ws.close();
+            done(err);
+          }
+        }
+      });
+
+      ws.on('close', () => {
+        done();
+      });
+
+      ws.on('error', (err) => {
+        done(err);
+      });
+    }, 10000);
+  });
 });
 
 /**

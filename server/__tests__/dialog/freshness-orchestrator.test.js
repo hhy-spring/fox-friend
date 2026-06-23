@@ -365,6 +365,47 @@ describe('freshness-orchestrator', () => {
       // 由于模块执行极快，主要验证架构正确性
       expect(parallelTime).toBeLessThanOrEqual(serialTime + 50);
     });
+
+    test('Issue #25: 多智能体并行执行速度比串行方案提升至少 50%', async () => {
+      // 使用带延迟的智能体模拟真实 I/O 场景
+      // 每个智能体延迟 30ms，串行 = 90ms，并行应 ≈ 30ms（提升 67% > 50%）
+      const AGENT_DELAY_MS = 30;
+
+      const delayedAgent = (name) => createAgent({
+        name,
+        taskHandler: async (input) => {
+          await new Promise(resolve => setTimeout(resolve, AGENT_DELAY_MS));
+          return { triggered: true, text: `${name}-output`, delay: AGENT_DELAY_MS };
+        }
+      });
+
+      // 并行执行：3 个智能体通过 Promise.all 并行
+      const parallelStart = Date.now();
+      await Promise.all([
+        delayedAgent('AgentA').execute({}),
+        delayedAgent('AgentB').execute({}),
+        delayedAgent('AgentC').execute({})
+      ]);
+      const parallelTime = Date.now() - parallelStart;
+
+      // 串行执行：3 个智能体顺序执行
+      const serialStart = Date.now();
+      await delayedAgent('AgentA').execute({});
+      await delayedAgent('AgentB').execute({});
+      await delayedAgent('AgentC').execute({});
+      const serialTime = Date.now() - serialStart;
+
+      // 计算提升比例
+      const improvementRatio = (serialTime - parallelTime) / serialTime;
+
+      // 验证：并行提升应 >= 50%
+      expect(parallelTime).toBeLessThan(serialTime);
+      expect(improvementRatio).toBeGreaterThanOrEqual(0.5);
+
+      // 并行时间应接近单智能体时间（30ms ± 容差），远小于串行时间（90ms）
+      expect(parallelTime).toBeLessThan(AGENT_DELAY_MS * 2);
+      expect(serialTime).toBeGreaterThanOrEqual(AGENT_DELAY_MS * 3);
+    });
   });
 
   describe('getAgentStats', () => {

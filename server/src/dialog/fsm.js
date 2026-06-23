@@ -89,6 +89,7 @@ function createDialogFSM(initialState = DIALOG_STATES.APPEARANCE) {
     getStepInfo() {
       const meta = STEP_META[currentState];
       return {
+        state: currentState,
         currentStep: meta.step,
         currentStepName: currentState,
         nextExpected: meta.nextExpected,

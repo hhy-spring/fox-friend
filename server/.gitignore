@@ -6,4 +6,5 @@ data/
 coverage/
 .env
 .worktrees/
-server/public/
+public/
+jest-out.txt

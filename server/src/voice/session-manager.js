@@ -19,6 +19,8 @@ const { createNamingCeremony } = require('../dialog/naming-ceremony');
 const { classifyInterest } = require('../dialog/interest-classifier');
 const { createMetricsTracker } = require('../dialog/metrics-tracker');
 const { mergeMetrics } = require('../dialog/metrics-repository');
+const { createFeynmanOrchestrator } = require('../dialog/feynman-orchestrator');
+const { createPartnerOrchestrator } = require('../dialog/partner-orchestrator');
 
 /**
  * 根据狐狸名字推导兴趣类型
@@ -161,6 +163,112 @@ function createSessionManager(db = null) {
       return { success: true, metricsPersisted };
     }
   };
+}
+
+/**
+ * 获取会话中的狐狸名字和兴趣类型（统一默认值处理）
+ * @param {object} session - 会话对象
+ * @returns {{ foxName: string, interestType: string }}
+ */
+function getSessionContext(session) {
+  return {
+    foxName: session.profile.foxName || '小狐狸',
+    interestType: session.interestType || 'generic'
+  };
+}
+
+/**
+ * 处理 FEYNMAN_TRIGGER 状态的消息
+ * Agent 2: Feynman Integration - 集成费曼编排器
+ *
+ * @param {object} session - 会话对象
+ * @param {object} sessionManager - 会话管理器
+ * @param {string} sessionId - 会话 ID
+ * @param {object} message - 消息对象
+ * @param {string} reaction - 反应类型
+ * @returns {object|null} 处理结果，null 表示未处理
+ */
+function handleFeynmanTriggerState(session, sessionManager, sessionId, message, reaction) {
+  // 获取或创建费曼编排器
+  if (!session.feynmanOrchestrator) {
+    const { foxName, interestType } = getSessionContext(session);
+    session.feynmanOrchestrator = createFeynmanOrchestrator(interestType, foxName);
+  }
+
+  const feynman = session.feynmanOrchestrator;
+
+  // 编排器处于 TRIGGER 状态 → 返回触发台词
+  if (feynman.getState() === 'TRIGGER') {
+    const triggerDialog = feynman.getTriggerDialog();
+    return {
+      dialog: triggerDialog,
+      targetCharacter: feynman.getTargetCharacter(),
+      reaction,
+      nextState: DIALOG_STATES.FEYNMAN_TRIGGER,
+      stepInfo: session.fsm.getStepInfo()
+    };
+  }
+
+  // 编排器处于 AWAIT_RESPONSE 状态 → 处理孩子反应
+  if (feynman.getState() === 'AWAIT_RESPONSE') {
+    const feedback = feynman.processChildResponse(message.content || '');
+    // 费曼完成 → 推进到 PARTNER_CONFIRM
+    sessionManager.updateState(sessionId, DIALOG_STATES.PARTNER_CONFIRM);
+    return {
+      dialog: feedback,
+      teachingWillingness: feedback.teachingWillingness,
+      reaction,
+      nextState: DIALOG_STATES.PARTNER_CONFIRM,
+      stepInfo: session.fsm.getStepInfo()
+    };
+  }
+
+  return null;
+}
+
+/**
+ * 处理 PARTNER_CONFIRM 状态的消息
+ * Agent 3: Partner Integration - 集成搭档编排器
+ *
+ * @param {object} session - 会话对象
+ * @param {string} reaction - 反应类型
+ * @returns {object|null} 处理结果，null 表示未处理
+ */
+function handlePartnerConfirmState(session, reaction) {
+  // 获取或创建搭档编排器
+  if (!session.partnerOrchestrator) {
+    const { foxName, interestType } = getSessionContext(session);
+    session.partnerOrchestrator = createPartnerOrchestrator(interestType, foxName);
+  }
+
+  const partner = session.partnerOrchestrator;
+
+  // 编排器处于 INVITE 状态 → 返回邀请台词
+  if (partner.getState() === 'INVITE') {
+    const invitationDialog = partner.getInvitationDialog();
+    return {
+      dialog: invitationDialog,
+      reaction,
+      nextState: DIALOG_STATES.PARTNER_CONFIRM,
+      stepInfo: session.fsm.getStepInfo()
+    };
+  }
+
+  // 编排器处于 AWAIT_RESPONSE 状态 → 处理孩子反应
+  if (partner.getState() === 'AWAIT_RESPONSE') {
+    const response = partner.processChildResponse(session._lastMessageContent || '');
+    const isComplete = partner.isComplete();
+    return {
+      dialog: response,
+      partnerAcceptance: partner.getPartnerAcceptance(),
+      flowComplete: isComplete,
+      reaction,
+      nextState: DIALOG_STATES.PARTNER_CONFIRM,
+      stepInfo: session.fsm.getStepInfo()
+    };
+  }
+
+  return null;
 }
 
 /**
@@ -348,7 +456,20 @@ function handleVoiceMessage(sessionManager, sessionId, message) {
     };
   }
 
-  // 其他步骤（Issue #2-#5 范围，暂返回当前状态信息）
+  // 步骤4：费曼学习法首次触发（Agent 2）
+  if (currentState === DIALOG_STATES.FEYNMAN_TRIGGER) {
+    const result = handleFeynmanTriggerState(session, sessionManager, sessionId, message, reaction);
+    if (result) return result;
+  }
+
+  // 步骤5：搭档确认（Agent 3）
+  if (currentState === DIALOG_STATES.PARTNER_CONFIRM) {
+    session._lastMessageContent = message.content || '';
+    const result = handlePartnerConfirmState(session, reaction);
+    if (result) return result;
+  }
+
+  // 其他未处理状态
   return {
     dialog: null,
     reaction,

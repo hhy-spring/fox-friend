@@ -96,8 +96,9 @@ function handleConnection(ws, req, db = null) {
     stepInfo: session.fsm.getStepInfo()
   }));
 
-  // 转换到 HELP_REQUEST
-  sessionManager.updateState(session.id, 'HELP_REQUEST');
+  // Issue #22 修复：不再在此处提前转换到 HELP_REQUEST
+  // 保留 APPEARANCE 状态，等待孩子的第一条反应（HESITANT/SILENT/QUICK），
+  // 由 handleVoiceMessage 的 APPEARANCE 分支根据实际反应返回正确的 followUp 台词后再转换
 
   // 监听管道事件
   pipeline.on(PIPELINE_EVENTS.INTERRUPTED, () => {

@@ -10,6 +10,7 @@
  */
 
 const { NAME_HINTS } = require('./name-hints');
+const { isGreeting } = require('./greeting-filter');
 
 // 排除词（不是名字的常见回复）
 const NON_NAME_PATTERNS = [
@@ -29,6 +30,11 @@ function isNameProvided(content) {
 
   // 排除明确不是名字的回复
   if (NON_NAME_PATTERNS.some(pattern => trimmed.includes(pattern))) {
+    return false;
+  }
+
+  // Issue #17: 排除问候语（你好、嗨、哈喽等不应被识别为名字）
+  if (isGreeting(trimmed)) {
     return false;
   }
 
@@ -54,6 +60,11 @@ function extractName(content) {
   if (!content || content.trim().length === 0) return null;
 
   const trimmed = content.trim();
+
+  // Issue #17: 问候语不提取为名字
+  if (isGreeting(trimmed)) {
+    return null;
+  }
 
   // 尝试从"叫你XX"模式中提取
   const callMatch = trimmed.match(/叫你(.+)/);

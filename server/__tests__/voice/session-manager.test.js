@@ -44,7 +44,7 @@ describe('会话管理器 - WebSocket 语音端点', () => {
       expect(result.nextState).toBe('HELP_REQUEST');
     });
 
-    test('HELP_REQUEST 状态收到名字 → 记录名字 + 转换到 NAMING_CEREMONY', () => {
+    test('HELP_REQUEST 状态收到名字 → 记录名字 + 返回崇拜回应 + 转换到 NAMING_CEREMONY', () => {
       const session = sessionManager.createSession('child_001');
       // 先转换到 HELP_REQUEST
       sessionManager.updateState(session.id, 'HELP_REQUEST');
@@ -58,6 +58,9 @@ describe('会话管理器 - WebSocket 语音端点', () => {
       expect(result.nameRecorded).toBe(true);
       expect(result.foxName).toBe('闪电');
       expect(result.nextState).toBe('NAMING_CEREMONY');
+      // Issue #18: 应返回崇拜回应而非求助台词
+      expect(result.dialog.mainLine).toContain('闪电');
+      expect(result.dialog.mainLine).not.toContain('我还没有名字');
     });
 
     test('HELP_REQUEST 状态收到"不知道" → 返回暗示选项', () => {
@@ -105,7 +108,9 @@ describe('会话管理器 - WebSocket 语音端点', () => {
   describe('NAMING_CEREMONY 状态处理', () => {
     let sessionManager;
 
-    // 辅助函数：将会话推进到 NAMING_CEREMONY 状态
+    // 辅助函数：将会话推进到 NAMING_CEREMONY 的 ASK_NICKNAME 子状态
+    // Issue #19 修复：崇拜回应在 HELP_REQUEST 阶段返回时，仪式已自动推进到 ASK_NICKNAME
+    // 不再需要额外发送"好酷"消息来触发 WORSHIP→ASK_NICKNAME 转换
     function advanceToNamingCeremony(foxName = '闪电') {
       const session = sessionManager.createSession('child_001');
       const sid = session.id;
@@ -115,7 +120,7 @@ describe('会话管理器 - WebSocket 语音端点', () => {
         responseTimeMs: 500,
         content: '你好'
       });
-      // HELP_REQUEST → NAMING_CEREMONY（提供名字）
+      // HELP_REQUEST → NAMING_CEREMONY（提供名字，返回崇拜回应 + 推进到 ASK_NICKNAME）
       handleVoiceMessage(sessionManager, sid, {
         type: 'child_response',
         responseTimeMs: 800,
@@ -141,82 +146,72 @@ describe('会话管理器 - WebSocket 语音端点', () => {
       sessionManager = createSessionManager();
     });
 
-    // Slice 1: 首次进入 NAMING_CEREMONY 创建仪式实例并返回崇拜响应
-    test('首次进入 NAMING_CEREMONY → 创建仪式实例，返回崇拜式回应', () => {
-      const sid = advanceToNamingCeremony('闪电');
+    // Slice 1: Issue #18 - 名字记录后立即返回崇拜回应（在 HELP_REQUEST 阶段）
+    // Issue #19: 仪式同时推进到 ASK_NICKNAME，返回昵称问题
+    test('HELP_REQUEST 提供名字 → 立即返回崇拜式回应 + 创建仪式实例 + 推进到 ASK_NICKNAME', () => {
+      const session = sessionManager.createSession('child_001');
+      const sid = session.id;
+      // APPEARANCE → HELP_REQUEST
+      handleVoiceMessage(sessionManager, sid, {
+        type: 'child_response', responseTimeMs: 500, content: '你好'
+      });
+      // HELP_REQUEST → 提供名字
       const result = handleVoiceMessage(sessionManager, sid, {
-        type: 'child_response',
-        responseTimeMs: 1000,
-        content: '嗯'
+        type: 'child_response', responseTimeMs: 800, content: '闪电'
       });
 
-      // 应创建仪式实例
-      const session = sessionManager.getSession(sid);
-      expect(session.ceremony).toBeDefined();
-      expect(session.ceremony.getSubState()).toBe('WORSHIP');
+      // 仪式实例应已创建
+      const updatedSession = sessionManager.getSession(sid);
+      expect(updatedSession.ceremony).toBeDefined();
+      // Issue #19: 仪式已推进到 ASK_NICKNAME（崇拜回应已返回，等待昵称回答）
+      expect(updatedSession.ceremony.getSubState()).toBe('ASK_NICKNAME');
 
-      // 返回崇拜式回应
+      // 返回崇拜式回应（非求助台词）
       expect(result.dialog).toBeDefined();
       expect(result.dialog.mainLine).toContain('闪电');
-      expect(result.ceremonySubState).toBe('WORSHIP');
-      expect(result.nextState).toBe('NAMING_CEREMONY');
-    });
-
-    // Slice 2: WORSHIP→ASK_NICKNAME 返回昵称问题
-    test('WORSHIP 子状态处理回答 → 返回昵称问题', () => {
-      const sid = advanceToNamingCeremony('闪电');
-      // 第一次消息：创建仪式 + 返回崇拜响应
-      handleVoiceMessage(sessionManager, sid, {
-        type: 'child_response',
-        responseTimeMs: 1000,
-        content: '嗯'
-      });
-      // 第二次消息：处理 WORSHIP 回答 → 进入 ASK_NICKNAME
-      const result = handleVoiceMessage(sessionManager, sid, {
-        type: 'child_response',
-        responseTimeMs: 1500,
-        content: '好酷'
-      });
-
-      expect(result.dialog).toBeDefined();
-      expect(result.dialog.field).toBe('nickname');
-      expect(result.dialog.mainLine).toContain('你叫什么');
+      // Issue #19: 同时返回昵称问题
+      expect(result.nextQuestion).toBeDefined();
+      expect(result.nextQuestion.field).toBe('nickname');
       expect(result.ceremonySubState).toBe('ASK_NICKNAME');
       expect(result.nextState).toBe('NAMING_CEREMONY');
     });
 
-    // Slice 3: 回答昵称问题
-    test('回答昵称问题 → 记录昵称，返回年龄问题', () => {
+    // Slice 2: ASK_NICKNAME 处理昵称回答 → 返回年龄问题
+    test('ASK_NICKNAME 子状态处理回答 → 返回昵称问题', () => {
+      // Issue #19: advanceToNamingCeremony 后仪式已在 ASK_NICKNAME
       const sid = advanceToNamingCeremony('闪电');
-      // 进入仪式
-      handleVoiceMessage(sessionManager, sid, {
-        type: 'child_response', responseTimeMs: 1000, content: '嗯'
-      });
-      // WORSHIP → ASK_NICKNAME
-      handleVoiceMessage(sessionManager, sid, {
-        type: 'child_response', responseTimeMs: 1500, content: '好酷'
-      });
-      // 回答昵称
+      // 发送昵称回答
       const result = handleVoiceMessage(sessionManager, sid, {
         type: 'child_response', responseTimeMs: 1200, content: '小明'
       });
 
       expect(result.collectedField).toBe('nickname');
       expect(result.collectedValue).toBe('小明');
-      expect(result.wasSkipped).toBe(false);
       expect(result.dialog.field).toBe('age');
       expect(result.ceremonySubState).toBe('ASK_AGE');
+    });
+
+    // Slice 3: 回答年龄问题
+    test('回答年龄问题 → 记录年龄，返回兴趣问题', () => {
+      const sid = advanceToNamingCeremony('闪电');
+      // 回答昵称
+      handleVoiceMessage(sessionManager, sid, {
+        type: 'child_response', responseTimeMs: 1200, content: '小明'
+      });
+      // 回答年龄
+      const result = handleVoiceMessage(sessionManager, sid, {
+        type: 'child_response', responseTimeMs: 1000, content: '6岁'
+      });
+
+      expect(result.collectedField).toBe('age');
+      expect(result.collectedValue).toBe(6);
+      expect(result.dialog.field).toBe('interests');
+      expect(result.ceremonySubState).toBe('ASK_INTERESTS');
     });
 
     // Slice 4: 跳过处理
     test('跳过昵称问题 → 记录为 null，继续下一个问题', () => {
       const sid = advanceToNamingCeremony('闪电');
-      handleVoiceMessage(sessionManager, sid, {
-        type: 'child_response', responseTimeMs: 1000, content: '嗯'
-      });
-      handleVoiceMessage(sessionManager, sid, {
-        type: 'child_response', responseTimeMs: 1500, content: '好酷'
-      });
       // 跳过昵称
       const result = handleVoiceMessage(sessionManager, sid, {
         type: 'child_response', responseTimeMs: 2000, content: '不知道'
@@ -231,14 +226,6 @@ describe('会话管理器 - WebSocket 语音端点', () => {
     // Slice 5: 完整流程（所有4个问题）
     test('完整流程：回答所有4个问题 → 仪式完成', () => {
       const sid = advanceToNamingCeremony('闪电');
-      // 进入仪式
-      handleVoiceMessage(sessionManager, sid, {
-        type: 'child_response', responseTimeMs: 1000, content: '嗯'
-      });
-      // WORSHIP → ASK_NICKNAME
-      handleVoiceMessage(sessionManager, sid, {
-        type: 'child_response', responseTimeMs: 1500, content: '好酷'
-      });
       // 回答昵称
       handleVoiceMessage(sessionManager, sid, {
         type: 'child_response', responseTimeMs: 1200, content: '小明'
@@ -266,12 +253,6 @@ describe('会话管理器 - WebSocket 语音端点', () => {
     test('仪式完成 → FSM 转换到 FEYNMAN_TRIGGER', () => {
       const sid = advanceToNamingCeremony('闪电');
       handleVoiceMessage(sessionManager, sid, {
-        type: 'child_response', responseTimeMs: 1000, content: '嗯'
-      });
-      handleVoiceMessage(sessionManager, sid, {
-        type: 'child_response', responseTimeMs: 1500, content: '好酷'
-      });
-      handleVoiceMessage(sessionManager, sid, {
         type: 'child_response', responseTimeMs: 1200, content: '小明'
       });
       handleVoiceMessage(sessionManager, sid, {
@@ -293,12 +274,6 @@ describe('会话管理器 - WebSocket 语音端点', () => {
     test('仪式完成 → profile 数据保存到会话', () => {
       const sid = advanceToNamingCeremony('闪电');
       handleVoiceMessage(sessionManager, sid, {
-        type: 'child_response', responseTimeMs: 1000, content: '嗯'
-      });
-      handleVoiceMessage(sessionManager, sid, {
-        type: 'child_response', responseTimeMs: 1500, content: '好酷'
-      });
-      handleVoiceMessage(sessionManager, sid, {
         type: 'child_response', responseTimeMs: 1200, content: '小明'
       });
       handleVoiceMessage(sessionManager, sid, {
@@ -315,19 +290,16 @@ describe('会话管理器 - WebSocket 语音端点', () => {
       expect(session.profile.nickname).toBe('小明');
       expect(session.profile.age).toBe(6);
       expect(session.profile.interests).toEqual(['画画']);
-      expect(session.profile.selfClaimedSkills).toBe('跑步很快');
+      // Issue #19: selfClaimedSkills 改为数组格式
+      expect(session.profile.selfClaimedSkills).toEqual(['跑步很快']);
       expect(session.profile.proactiveSpeechCountInCeremony).toBeDefined();
     });
 
     // Slice 8: 主动发言计数
     test('仪式中主动发言计数', () => {
       const sid = advanceToNamingCeremony('闪电');
-      handleVoiceMessage(sessionManager, sid, {
-        type: 'child_response', responseTimeMs: 1000, content: '嗯'
-      });
-      handleVoiceMessage(sessionManager, sid, {
-        type: 'child_response', responseTimeMs: 1500, content: '好酷'
-      });
+      // Issue #19: WORSHIP 不再需要单独的消息，仪式已推进到 ASK_NICKNAME
+      // 后续4个回答各计1次
       handleVoiceMessage(sessionManager, sid, {
         type: 'child_response', responseTimeMs: 1200, content: '小明'
       });
@@ -341,11 +313,11 @@ describe('会话管理器 - WebSocket 语音端点', () => {
         type: 'child_response', responseTimeMs: 1200, content: '跑步很快'
       });
 
-      // 仪式中的主动发言计数（第一条创建仪式时不计数，后续5条各计1次）
-      expect(result.proactiveSpeechCount).toBe(5);
+      // 4个回答(4) = 4 (WORSHIP 不再需要单独的消息)
+      expect(result.proactiveSpeechCount).toBe(4);
     });
 
-    // Slice 9: deriveInterestType 辅助函数
+    // Slice 9: deriveInterestType 辅助函数（委托 classifyInterest）
     test('deriveInterestType - 闪电 → speed', () => {
       expect(deriveInterestType('闪电')).toBe('speed');
     });
@@ -371,30 +343,42 @@ describe('会话管理器 - WebSocket 语音端点', () => {
     });
 
     test('deriveInterestType - 无匹配的名字 → generic', () => {
-      expect(deriveInterestType('小飞')).toBe('generic');
+      expect(deriveInterestType('豆豆')).toBe('generic');
     });
 
-    // 兴趣类型影响崇拜响应内容
+    // Issue #18: 兴趣类型影响崇拜响应内容（在 HELP_REQUEST 阶段返回）
     test('speed 兴趣类型的崇拜响应包含速度相关内容', () => {
-      const sid = advanceToNamingCeremony('闪电');
+      const session = sessionManager.createSession('child_001');
+      const sid = session.id;
+      handleVoiceMessage(sessionManager, sid, {
+        type: 'child_response', responseTimeMs: 500, content: '你好'
+      });
       const result = handleVoiceMessage(sessionManager, sid, {
-        type: 'child_response', responseTimeMs: 1000, content: '嗯'
+        type: 'child_response', responseTimeMs: 800, content: '闪电'
       });
       expect(result.dialog.mainLine).toContain('嗖');
     });
 
     test('dinosaur 兴趣类型的崇拜响应包含恐龙相关内容', () => {
-      const sid = advanceToNamingCeremony('恐龙蛋');
+      const session = sessionManager.createSession('child_001');
+      const sid = session.id;
+      handleVoiceMessage(sessionManager, sid, {
+        type: 'child_response', responseTimeMs: 500, content: '你好'
+      });
       const result = handleVoiceMessage(sessionManager, sid, {
-        type: 'child_response', responseTimeMs: 1000, content: '嗯'
+        type: 'child_response', responseTimeMs: 800, content: '恐龙蛋'
       });
       expect(result.dialog.mainLine).toContain('恐龙');
     });
 
     test('generic 兴趣类型的崇拜响应包含通用内容', () => {
-      const sid = advanceToNamingCeremony('小飞');
+      const session = sessionManager.createSession('child_001');
+      const sid = session.id;
+      handleVoiceMessage(sessionManager, sid, {
+        type: 'child_response', responseTimeMs: 500, content: '你好'
+      });
       const result = handleVoiceMessage(sessionManager, sid, {
-        type: 'child_response', responseTimeMs: 1000, content: '嗯'
+        type: 'child_response', responseTimeMs: 800, content: '豆豆'
       });
       expect(result.dialog.mainLine).toContain('好酷的名字');
     });

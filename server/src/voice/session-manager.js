@@ -12,26 +12,45 @@
 
 const { v4: uuidv4 } = require('uuid');
 const { createDialogFSM, DIALOG_STATES } = require('../dialog/fsm');
-const { detectReaction, getStepDialog, REACTION_TYPES } = require('../dialog/dialog-engine');
-const { NAME_HINTS, getNameHints, getNameHintsLine } = require('../dialog/name-hints');
+const { detectReaction, getStepDialog } = require('../dialog/dialog-engine');
+const { getNameHints, getNameHintsLine } = require('../dialog/name-hints');
 const { processChildInput } = require('../dialog/name-processor');
 const { createNamingCeremony } = require('../dialog/naming-ceremony');
+const { classifyInterest } = require('../dialog/interest-classifier');
 
 /**
  * 根据狐狸名字推导兴趣类型
  * 参考技术架构文档§八「兴趣分型映射」
  *
+ * Issue #18 修复：使用 classifyInterest（Issue #3 完整关键词库）替代旧 NAME_HINTS 单字匹配
+ * 保留函数签名以兼容现有测试，内部委托 classifyInterest
+ *
  * @param {string} foxName - 狐狸名字
  * @returns {string} 兴趣类型
  */
 function deriveInterestType(foxName) {
-  if (!foxName) return 'generic';
-  for (const hint of NAME_HINTS) {
-    if (foxName.includes(hint.character)) {
-      return hint.interestType;
-    }
-  }
-  return 'generic';
+  return classifyInterest(foxName).type;
+}
+
+/**
+ * 为会话创建命名仪式实例（Issue #18 重构：消除重复代码）
+ * 统一兴趣分型 + 仪式创建 + 会话状态更新
+ *
+ * @param {object} session - 会话对象
+ * @param {string} foxName - 狐狸名字
+ * @param {string} nameSource - 名字来源
+ * @returns {object} 命名仪式实例
+ */
+function createCeremonyForSession(session, foxName, nameSource) {
+  const classificationResult = classifyInterest(foxName);
+  const interestType = classificationResult.type;
+  const ceremony = createNamingCeremony(foxName, nameSource, interestType);
+
+  session.ceremony = ceremony;
+  session.interestType = interestType;
+  session.classificationResult = classificationResult;
+
+  return ceremony;
 }
 
 /**
@@ -155,8 +174,6 @@ function handleVoiceMessage(sessionManager, sessionId, message) {
 
   // 步骤2：求助
   if (currentState === DIALOG_STATES.HELP_REQUEST) {
-    const dialog = getStepDialog(DIALOG_STATES.HELP_REQUEST, reaction);
-
     // 检查孩子是否提供了名字
     const nameResult = processChildInput({
       childContent: message.content,
@@ -165,26 +182,46 @@ function handleVoiceMessage(sessionManager, sessionId, message) {
     });
 
     if (nameResult.nameRecorded) {
-      // 名字已提供 → 记录并转换状态
+      // Issue #18 修复：名字已提供 → 立即创建命名仪式并返回崇拜回应
+      // （旧实现返回 HELP_REQUEST 台词，导致兴趣分型台词未在 WebSocket 流中触发）
+      const foxName = nameResult.foxName;
+      const nameSource = nameResult.nameSource;
+
+      // 创建命名仪式实例（统一兴趣分型入口）
+      const ceremony = createCeremonyForSession(session, foxName, nameSource);
+
+      // 记录画像数据到会话
       sessionManager.updateProfile(sessionId, {
-        foxName: nameResult.foxName,
-        foxNameSource: nameResult.nameSource
+        foxName,
+        foxNameSource: nameSource
       });
+
+      // 转换到 NAMING_CEREMONY 状态
       sessionManager.updateState(sessionId, DIALOG_STATES.NAMING_CEREMONY);
 
+      // Issue #19 修复：崇拜回应已在此返回，推进仪式从 WORSHIP 到 ASK_NICKNAME
+      // 这样孩子的下一条消息会直接作为昵称回答处理，而非被 WORSHIP 转换消费
+      const worshipDialog = ceremony.getWorshipResponse();
+      ceremony.startCollection();
+      const nextQuestion = ceremony.getCurrentQuestion();
+
       return {
-        dialog,
+        dialog: worshipDialog,
+        nextQuestion,
         reaction,
         nameRecorded: true,
-        foxName: nameResult.foxName,
-        nameSource: nameResult.nameSource,
+        foxName,
+        nameSource,
         skipHints: nameResult.skipHints,
+        interestType: session.interestType,
+        ceremonySubState: ceremony.getSubState(),
         nextState: DIALOG_STATES.NAMING_CEREMONY,
         stepInfo: session.fsm.getStepInfo()
       };
     }
 
-    // 名字未提供 → 显示暗示
+    // 名字未提供 → 返回求助台词 + 显示暗示
+    const dialog = getStepDialog(DIALOG_STATES.HELP_REQUEST, reaction);
     const hints = getNameHints();
     const hintLine = getNameHintsLine(hints);
 
@@ -207,17 +244,22 @@ function handleVoiceMessage(sessionManager, sessionId, message) {
     let ceremony = session.ceremony;
 
     if (!ceremony) {
-      // 首次进入 NAMING_CEREMONY - 创建仪式实例
-      const foxName = session.profile.foxName;
-      const nameSource = session.profile.foxNameSource;
-      const interestType = deriveInterestType(foxName);
-      ceremony = createNamingCeremony(foxName, nameSource, interestType);
-      session.ceremony = ceremony;
+      // Fallback：仪式未在 HELP_REQUEST 阶段创建（如手动状态转换）
+      // Issue #18：使用 createCeremonyForSession 统一兴趣分型入口
+      ceremony = createCeremonyForSession(
+        session,
+        session.profile.foxName,
+        session.profile.foxNameSource
+      );
 
-      // 返回崇拜式回应
+      // Issue #19: 推进仪式从 WORSHIP 到 ASK_NICKNAME，与主路径保持一致
       const worshipDialog = ceremony.getWorshipResponse();
+      ceremony.startCollection();
+      const nextQuestion = ceremony.getCurrentQuestion();
+
       return {
         dialog: worshipDialog,
+        nextQuestion,
         reaction,
         ceremonySubState: ceremony.getSubState(),
         nextState: DIALOG_STATES.NAMING_CEREMONY,

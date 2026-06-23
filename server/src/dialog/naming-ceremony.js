@@ -139,6 +139,32 @@ function extractAge(content) {
 }
 
 /**
+ * 从孩子回答中提取昵称
+ * 剥离"我叫"、"我是"等常见前缀
+ * @param {string} content - 孩子说的内容
+ * @returns {string|null}
+ */
+function extractNickname(content) {
+  if (!content || content.trim().length === 0) return null;
+  const trimmed = content.trim();
+
+  // 如果是跳过回答，返回null
+  if (isSkipAnswer(trimmed)) return null;
+
+  // 剥离"我叫X"、"我是X"前缀
+  const prefixMatch = trimmed.match(/^我叫(.+)$/);
+  if (prefixMatch) {
+    return prefixMatch[1].trim();
+  }
+  const amPrefixMatch = trimmed.match(/^我是(.+)$/);
+  if (amPrefixMatch) {
+    return amPrefixMatch[1].trim();
+  }
+
+  return trimmed;
+}
+
+/**
  * 从孩子回答中提取兴趣
  * @param {string} content - 孩子说的内容
  * @returns {string[]|null}
@@ -200,6 +226,15 @@ function createNamingCeremony(foxName, nameSource, interestType = 'generic') {
       };
     },
 
+    // 开始画像采集（崇拜回应已返回，推进到 ASK_NICKNAME）
+    // Issue #19: 替代 processAnswer('') 的语义化方法
+    startCollection() {
+      if (subState === CEREMONY_SUB_STATES.WORSHIP) {
+        subState = CEREMONY_SUB_STATES.ASK_NICKNAME;
+      }
+      return subState;
+    },
+
     // 获取当前画像问题
     getCurrentQuestion() {
       const question = PROFILE_QUESTIONS[subState];
@@ -228,6 +263,10 @@ function createNamingCeremony(foxName, nameSource, interestType = 'generic') {
         if (currentField === 'age') {
           value = extractAge(content);
         } else if (currentField === 'interests') {
+          value = extractInterests(content);
+        } else if (currentField === 'nickname') {
+          value = extractNickname(content);
+        } else if (currentField === 'selfClaimedSkills') {
           value = extractInterests(content);
         } else {
           value = content.trim();
@@ -275,6 +314,7 @@ module.exports = {
   SKIP_PATTERNS,
   isSkipAnswer,
   extractAge,
+  extractNickname,
   extractInterests,
   createNamingCeremony
 };

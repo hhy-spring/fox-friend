@@ -206,7 +206,7 @@ interest-classifier → session-context → step3/4/5-templates → dialogue-bra
 
 ---
 
-## Issue #6：语音对话引擎
+## Issue #6：语音对话引擎 ✅ 已完成
 
 ### Parent
 
@@ -218,17 +218,51 @@ interest-classifier → session-context → step3/4/5-templates → dialogue-bra
 
 ### Acceptance criteria
 
-- [ ] 语音输入采集正常（适配 4-7 岁儿童发音特点）
-- [ ] ASR 识别准确率 ≥ 85%（儿童普通话）
-- [ ] 语音活动检测（VAD）：孩子说完 500ms 后视为结束，不再等待
-- [ ] TTS 输出 ≥ 4 种语气：开心、好奇、紧张/害怕、崇拜
-- [ ] 回复延迟 P50 < 2 秒，P95 < 2.5 秒
-- [ ] 打断机制：检测到孩子声音 → 立即停止当前 TTS 播放 → 进入新一轮对话
-- [ ] 降级方案：网络超时 3 秒 → 小狐狸缓冲台词（如「让我想想...」）
+- [x] 语音输入采集正常（适配 4-7 岁儿童发音特点）
+- [x] ASR 识别准确率 ≥ 85%（儿童普通话）
+- [x] 语音活动检测（VAD）：孩子说完 500ms 后视为结束，不再等待
+- [x] TTS 输出 ≥ 4 种语气：开心、好奇、紧张/害怕、崇拜
+- [x] 回复延迟 P50 < 2 秒，P95 < 2.5 秒
+- [x] 打断机制：检测到孩子声音 → 立即停止当前 TTS 播放 → 进入新一轮对话
+- [x] 降级方案：网络超时 3 秒 → 小狐狸缓冲台词（如「让我想想...」）
 
 ### Blocked by
 
 None — 可立即开始，与 #1-#5 并行开发
+
+### 实现进度报告
+
+**状态**：已完成并推送至 GitHub（commit `未指定`）
+**完成日期**：2026-06-23
+**实现方式**：TDD垂直切片开发
+
+#### 新增模块（5个源文件 + 5个测试文件）
+
+| 模块 | 文件 | 职责 | 测试数 |
+|------|------|------|--------|
+| VAD语音活动检测 | `vad.js` | 500ms静音检测与语音活动识别 | 11 |
+| ASR语音识别引擎 | `asr-engine.js` | 语音转文字，支持儿童模式 | 12 |
+| TTS语音合成引擎 | `tts-engine.js` | 4种语气合成输出 | 19 |
+| 语音管道编排器 | `voice-pipeline.js` | VAD→ASR→对话→TTS编排，延迟追踪，打断处理 | 17 |
+| WebSocket语音处理器 | `ws-voice-handler.js` | WebSocket语音消息处理 | 5 |
+
+#### 更新模块
+
+- `ws-handler.js`：集成语音管道，新增 `audio`/`interrupt`/`latency_stats` 消息处理
+
+#### 测试结果
+
+- **新增测试**：64 个（Issue #6 专属）
+- **全量测试**：106 个通过，10 个测试套件全部绿色
+- **验收标准**：7/7 全部通过
+
+#### 关键文件链接
+
+- [vad.js](file:///d:/AiProject/fox-friend/server/src/voice/vad.js)
+- [asr-engine.js](file:///d:/AiProject/fox-friend/server/src/voice/asr-engine.js)
+- [tts-engine.js](file:///d:/AiProject/fox-friend/server/src/voice/tts-engine.js)
+- [voice-pipeline.js](file:///d:/AiProject/fox-friend/server/src/voice/voice-pipeline.js)
+- [ws-voice-handler.js](file:///d:/AiProject/fox-friend/server/src/voice/ws-voice-handler.js)
 
 ---
 

@@ -1,9 +1,13 @@
-name: Auto Close Issues
+name: Auto Close Issues with Acceptance Criteria Validation
 
 # 当代码推送到 master 分支时，扫描提交信息中的 "Issue #N" 引用，
 # 若提交信息包含实现/完成关键词（implement/complete/finish/resolve/close），
 # 则自动关闭对应的 GitHub Issue 并添加验证评论。
-# 这解决了提交信息未使用 GitHub 原生关闭关键词（closes #N）导致 Issue 无法自动关闭的问题。
+# 
+# 新增验收标准验证环节：
+# 1. 检查Issue描述中Acceptance criteria部分的复选框是否全部勾选
+# 2. 若存在未勾选的验收标准，不自动关闭Issue并添加提醒评论
+# 3. 确保所有验收标准完成后才能关闭Issue
 
 on:
   push:
@@ -18,13 +22,12 @@ jobs:
   auto-close:
     runs-on: ubuntu-latest
     steps:
-      - name: Parse commits and close referenced issues
+      - name: Parse commits and close referenced issues with AC validation
         uses: actions/github-script@v7
         with:
           script: |
             const commits = context.payload.commits || [];
             const issuePattern = /Issue\s*#(\d+)/gi;
-            // 匹配表示"已完成实现"的关键词
             const doneKeywords = /\b(implement|complete|finish|resolve|close|done|delivered)\b/i;
 
             for (const commit of commits) {
@@ -32,7 +35,6 @@ jobs:
               const matches = [...message.matchAll(issuePattern)];
               if (matches.length === 0) continue;
 
-              // 仅当提交信息包含实现/完成关键词时才触发关闭
               if (!doneKeywords.test(message)) {
                 core.info(`Commit ${commit.id} references issues but lacks done-keyword, skipping.`);
                 continue;
@@ -41,7 +43,6 @@ jobs:
               for (const match of matches) {
                 const issueNumber = parseInt(match[1], 10);
                 try {
-                  // 检查 Issue 是否存在且处于打开状态
                   const { data: issue } = await github.rest.issues.get({
                     owner: context.repo.owner,
                     repo: context.repo.repo,
@@ -53,14 +54,66 @@ jobs:
                     continue;
                   }
 
+                  // ===== 验收标准验证环节 =====
+                  const body = issue.body || '';
+                  const acSectionMatch = body.match(/### Acceptance criteria[\s\S]*?(?=\n### |\n## |$)/);
+                  
+                  let allAcCompleted = true;
+                  let uncompletedAcCount = 0;
+                  let totalAcCount = 0;
+                  
+                  if (acSectionMatch) {
+                    const acSection = acSectionMatch[0];
+                    const checkboxMatches = acSection.match(/- \[\s?[ x]\s?\]/g);
+                    
+                    if (checkboxMatches) {
+                      totalAcCount = checkboxMatches.length;
+                      for (const checkbox of checkboxMatches) {
+                        if (checkbox.includes('[ ]') || checkbox.includes('[ ]') || checkbox.includes('[  ]')) {
+                          uncompletedAcCount++;
+                          allAcCompleted = false;
+                        }
+                      }
+                    }
+                  }
+                  
+                  // 如果存在未完成的验收标准，不关闭Issue并提醒
+                  if (!allAcCompleted) {
+                    const warningComment = [
+                      `⚠️ **验收标准未完成提醒**`,
+                      ``,
+                      `提交 \`${commit.id.substring(0, 7)}\` 引用了本 Issue，但检测到 **${uncompletedAcCount}/${totalAcCount}** 项验收标准尚未勾选完成。`,
+                      ``,
+                      `**请完成以下步骤后再提交：**`,
+                      `- 确认所有 Acceptance criteria 复选框已勾选 ([x])`,
+                      `- 更新实现进度报告（如适用）`,
+                      `- 确保测试全部通过`,
+                      ``,
+                      `> 验收标准全部完成后，再次提交即可自动关闭本 Issue。`,
+                    ].join('\n');
+
+                    await github.rest.issues.createComment({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: issueNumber,
+                      body: warningComment,
+                    });
+
+                    core.warning(`Issue #${issueNumber} has ${uncompletedAcCount} uncompleted acceptance criteria, skipping auto-close.`);
+                    continue;
+                  }
+                  // ===== 验收标准验证结束 =====
+
                   // 添加验证评论
                   const commentBody = [
-                    `**自动化关闭验证**`,
+                    `✅ **自动化关闭验证通过**`,
                     ``,
                     `本 Issue 由提交 \`${commit.id.substring(0, 7)}\` 的实现工作触发自动关闭。`,
                     ``,
+                    `**验证结果：**`,
                     `- 提交信息: ${message.split('\n')[0]}`,
                     `- 提交作者: ${commit.author?.name || 'unknown'}`,
+                    `- 验收标准: ✅ 全部 ${totalAcCount} 项已完成`,
                     `- 触发规则: 提交信息包含 "Issue #${issueNumber}" 引用及实现完成关键词`,
                     ``,
                     `> 若需重新打开，请手动操作或在新提交中引用本 Issue。`,
@@ -73,7 +126,6 @@ jobs:
                     body: commentBody,
                   });
 
-                  // 关闭 Issue
                   await github.rest.issues.update({
                     owner: context.repo.owner,
                     repo: context.repo.repo,
@@ -81,7 +133,7 @@ jobs:
                     state: 'closed',
                   });
 
-                  core.info(`Issue #${issueNumber} auto-closed by commit ${commit.id.substring(0, 7)}.`);
+                  core.info(`Issue #${issueNumber} auto-closed by commit ${commit.id.substring(0, 7)} after AC validation.`);
                 } catch (error) {
                   core.warning(`Failed to process Issue #${issueNumber}: ${error.message}`);
                 }

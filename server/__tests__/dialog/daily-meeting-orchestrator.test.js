@@ -351,4 +351,227 @@ describe('DailyMeetingOrchestrator - 多智能体中央协调器', () => {
       expect(result).toHaveProperty('agentResults');
     });
   });
+
+  // ============================================================
+  // Issue #25: 关系保鲜机制集成测试
+  // 验证 freshness 文本被集成到 openingText 中
+  // ============================================================
+  describe('Issue #25 - 关系保鲜机制集成到开场文本', () => {
+    test('第5次见面时互惠暴露文本应嵌入 openingText（session_count % 5 == 0）', async () => {
+      const childProfile = {
+        nickname: '闪电',
+        foxName: '恐龙蛋',
+        interests_derived_from_fox_name: ['恐龙']
+      };
+
+      sessionStateManager.saveSession('child_001', {
+        date: '2026-06-22',
+        story_stage: 'letter_stone',
+        subject: 'pinyin',
+        items_learned: ['a', 'o'],
+        mastery_status: {},
+        child_mood: 'neutral',
+        chat_frequency: 'daily',
+        teaching_method_used: 'feynman',
+        duration_minutes: 5,
+        child_spontaneous_remarks: []
+      });
+
+      const result = await orchestrator.generateDailyOpening({
+        childId: 'child_001',
+        childProfile,
+        sessionCount: 5
+      });
+
+      // 互惠暴露应被触发
+      expect(result.freshness.reciprocalExposure.triggered).toBe(true);
+      expect(result.freshness.reciprocalExposure.exposureText).toBeTruthy();
+
+      // 关键集成验证：openingText 应包含互惠暴露文本
+      expect(result.openingText).toContain(result.freshness.reciprocalExposure.exposureText);
+    });
+
+    test('第3次见面时成长反馈文本应嵌入 openingText（session_count % 3 == 0）', async () => {
+      const childProfile = {
+        nickname: '闪电',
+        foxName: '恐龙蛋',
+        interests_derived_from_fox_name: ['恐龙']
+      };
+
+      sessionStateManager.saveSession('child_001', {
+        date: '2026-06-22',
+        story_stage: 'letter_stone',
+        subject: 'pinyin',
+        items_learned: ['a', 'o'],
+        mastery_status: {},
+        child_mood: 'neutral',
+        chat_frequency: 'daily',
+        teaching_method_used: 'feynman',
+        duration_minutes: 5,
+        child_spontaneous_remarks: []
+      });
+
+      const result = await orchestrator.generateDailyOpening({
+        childId: 'child_001',
+        childProfile,
+        sessionCount: 3
+      });
+
+      // 成长反馈应被触发
+      expect(result.freshness.growthFeedback.triggered).toBe(true);
+      expect(result.freshness.growthFeedback.feedbackText).toBeTruthy();
+
+      // 关键集成验证：openingText 应包含成长反馈文本
+      expect(result.openingText).toContain(result.freshness.growthFeedback.feedbackText);
+    });
+
+    test('惊喜时刻触发时文本应嵌入 openingText（通过 rng 控制确定性触发）', async () => {
+      // 使用确定性 rng 强制惊喜触发（rng() 返回 0 < 1/6 触发阈值）
+      const deterministicOrchestrator = createDailyMeetingOrchestrator({
+        sessionStateManager,
+        rng: () => 0
+      });
+
+      const childProfile = {
+        nickname: '闪电',
+        foxName: '恐龙蛋',
+        interests_derived_from_fox_name: ['恐龙']
+      };
+
+      sessionStateManager.saveSession('child_001', {
+        date: '2026-06-22',
+        story_stage: 'letter_stone',
+        subject: 'pinyin',
+        items_learned: ['a'],
+        mastery_status: {},
+        child_mood: 'neutral',
+        chat_frequency: 'daily',
+        teaching_method_used: 'feynman',
+        duration_minutes: 5,
+        child_spontaneous_remarks: []
+      });
+
+      const result = await deterministicOrchestrator.generateDailyOpening({
+        childId: 'child_001',
+        childProfile,
+        sessionCount: 4
+      });
+
+      // 惊喜时刻应被触发（rng=0 < 1/6）
+      expect(result.freshness.surpriseMoment.triggered).toBe(true);
+      expect(result.freshness.surpriseMoment.surpriseText).toBeTruthy();
+
+      // 关键集成验证：openingText 应包含惊喜文本
+      expect(result.openingText).toContain(result.freshness.surpriseMoment.surpriseText);
+    });
+
+    test('记忆锚点应嵌入 openingText（每次开场引用上次关键事件）', async () => {
+      const childProfile = {
+        nickname: '闪电',
+        foxName: '恐龙蛋',
+        interests_derived_from_fox_name: ['恐龙']
+      };
+
+      sessionStateManager.saveSession('child_001', {
+        date: '2026-06-22',
+        story_stage: 'letter_stone',
+        subject: 'pinyin',
+        items_learned: ['a', 'o', 'e'],
+        mastery_status: { a: 'mastered' },
+        child_mood: 'energetic',
+        chat_frequency: 'daily',
+        teaching_method_used: 'feynman',
+        duration_minutes: 8,
+        child_spontaneous_remarks: ['我喜欢恐龙']
+      });
+
+      const result = await orchestrator.generateDailyOpening({
+        childId: 'child_001',
+        childProfile,
+        sessionCount: 2
+      });
+
+      // 记忆锚点应被激活
+      expect(result.memoryAnchor.hasAnchor).toBe(true);
+      expect(result.memoryAnchor.anchorText).toBeTruthy();
+
+      // 关键集成验证：openingText 应包含记忆锚点文本
+      expect(result.openingText).toContain(result.memoryAnchor.anchorText);
+    });
+
+    test('非触发会话不应嵌入互惠暴露和成长反馈文本（session_count=4）', async () => {
+      const childProfile = {
+        nickname: '闪电',
+        foxName: '恐龙蛋'
+      };
+
+      sessionStateManager.saveSession('child_001', {
+        date: '2026-06-22',
+        story_stage: 'letter_stone',
+        subject: 'pinyin',
+        items_learned: ['a'],
+        mastery_status: {},
+        child_mood: 'neutral',
+        chat_frequency: 'daily',
+        teaching_method_used: 'feynman',
+        duration_minutes: 5,
+        child_spontaneous_remarks: []
+      });
+
+      // 使用 rng=1 确保惊喜也不触发
+      const noSurpriseOrchestrator = createDailyMeetingOrchestrator({
+        sessionStateManager,
+        rng: () => 1
+      });
+
+      const result = await noSurpriseOrchestrator.generateDailyOpening({
+        childId: 'child_001',
+        childProfile,
+        sessionCount: 4
+      });
+
+      // session_count=4：4%5!=0（互惠暴露不触发），4%3!=0（成长反馈不触发）
+      expect(result.freshness.reciprocalExposure.triggered).toBe(false);
+      expect(result.freshness.growthFeedback.triggered).toBe(false);
+      // rng=1 > 1/6，惊喜不触发
+      expect(result.freshness.surpriseMoment.triggered).toBe(false);
+
+      // freshnessText 应为空
+      expect(result.freshness.freshnessText).toBe('');
+    });
+
+    test('storyStage 加载失败时应优雅降级使用默认阶段', async () => {
+      const childProfile = { nickname: '闪电', foxName: '恐龙蛋' };
+
+      // 使用不存在的 childId，loadStoryStage 返回 success=false
+      const result = await orchestrator.generateDailyOpening({
+        childId: 'child_no_stage',
+        childProfile,
+        sessionCount: 2
+      });
+
+      // 应仍能生成开场（使用默认故事阶段）
+      expect(result.openingText).toBeTruthy();
+      expect(result.storyStage).toHaveProperty('id');
+    });
+
+    test('已保存 storyStage 时应加载并使用（覆盖 loadStoryStage 成功分支）', async () => {
+      const childProfile = { nickname: '闪电', foxName: '恐龙蛋' };
+
+      // 先保存故事阶段数据
+      sessionStateManager.saveStoryStage('child_with_stage', {
+        currentStageIndex: 2
+      });
+
+      const result = await orchestrator.generateDailyOpening({
+        childId: 'child_with_stage',
+        childProfile,
+        sessionCount: 2
+      });
+
+      // 应加载已保存的阶段（index=2 对应第3阶段）
+      expect(result.openingText).toBeTruthy();
+      expect(result.storyStage).toHaveProperty('id');
+    });
+  });
 });

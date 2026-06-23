@@ -34,8 +34,17 @@ router.get('/:id/metrics', (req, res) => {
     });
   }
 
-  // 解析指标 JSON
-  const reactions = JSON.parse(profile.first_meeting_reactions);
+  // 解析指标 JSON（防御性解析，避免非法 JSON 导致 500）
+  let reactions;
+  try {
+    reactions = JSON.parse(profile.first_meeting_reactions);
+  } catch {
+    return res.status(200).json({
+      childId: id,
+      metrics: null,
+      message: '情感连接指标数据格式异常'
+    });
+  }
 
   // 计算情感连接是否建立并返回
   const metrics = {

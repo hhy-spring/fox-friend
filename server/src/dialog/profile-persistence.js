@@ -17,6 +17,20 @@ const path = require('path');
 // 画像必要字段定义
 const REQUIRED_FIELDS = ['nickname', 'age', 'interests', 'self_claimed_skills'];
 
+// childId 合法格式：UUID 或字母数字+连字符，禁止路径分隔符（防路径遍历）
+const CHILD_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+
+/**
+ * 校验 childId 格式，防止路径遍历攻击
+ * @param {string} childId
+ * @throws {Error} 格式非法时抛错
+ */
+function validateChildId(childId) {
+  if (!childId || typeof childId !== 'string' || !CHILD_ID_PATTERN.test(childId)) {
+    throw new Error('非法的 childId 格式');
+  }
+}
+
 /**
  * 验证画像完整性
  * @param {object} profile - 画像数据
@@ -51,6 +65,7 @@ function validateProfile(profile) {
  * @returns {{ success: boolean, path: string, profile: object, validation: object, timestamp: string }}
  */
 function saveProfile(profile, childId, options = {}) {
+  validateChildId(childId);
   const storageDir = options.storageDir || path.join(__dirname, '..', '..', 'data');
   const filePath = path.join(storageDir, `profile_${childId}.json`);
 
@@ -86,6 +101,7 @@ function saveProfile(profile, childId, options = {}) {
  * @returns {{ success: boolean, profile: object|null, path: string }}
  */
 function loadProfile(childId, options = {}) {
+  validateChildId(childId);
   const storageDir = options.storageDir || path.join(__dirname, '..', '..', 'data');
   const filePath = path.join(storageDir, `profile_${childId}.json`);
 
@@ -109,4 +125,4 @@ function loadProfile(childId, options = {}) {
   };
 }
 
-module.exports = { validateProfile, saveProfile, loadProfile };
+module.exports = { validateProfile, saveProfile, loadProfile, validateChildId };

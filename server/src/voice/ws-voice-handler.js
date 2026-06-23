@@ -41,7 +41,18 @@ const DIFFICULT_KEYWORDS = ['太难', '不会', '不懂', '不开心'];
  * @param {string} message - 错误信息
  */
 function sendError(ws, message) {
-  ws.send(JSON.stringify({ type: 'error', message }));
+  safeSend(ws, { type: 'error', message });
+}
+
+/**
+ * 安全发送 WebSocket 消息（检查连接状态，避免连接关闭后发送抛异常）
+ * @param {WebSocket} ws
+ * @param {object} data - 待发送的对象（会自动 JSON.stringify）
+ */
+function safeSend(ws, data) {
+  if (ws.readyState === ws.OPEN) {
+    ws.send(JSON.stringify(data));
+  }
 }
 
 /**
@@ -68,12 +79,14 @@ function classifyRefusalType(text) {
  * @param {string} options.asrType - ASR引擎类型
  * @param {string} options.ttsType - TTS引擎类型
  * @param {string} [options.storageDir] - 存储目录，用于读取孩子画像和会话历史
+ * @param {object} [options.db] - 数据库实例（better-sqlite3），用于会话结束时持久化指标
  * @returns {{wss: WebSocketServer, handleVoiceConnection: function, pipelines: Map}}
  */
 function createWSServer(options = {}) {
   const wss = new WebSocketServer({ noServer: true });
   const pipelines = new Map();
-  const sessionManager = createSessionManager();
+  const db = options.db || null;
+  const sessionManager = createSessionManager(db);
   const storageDir = options.storageDir;
   const sessionStateManager = storageDir
     ? createSessionStateManager({ storageDir })
@@ -138,9 +151,10 @@ function createWSServer(options = {}) {
   /**
    * 为新连接创建语音管道
    * @param {string} childId
+   * @param {string} sessionId - 会话 ID（避免 O(n) 反查 Map）
    * @returns {object} 语音管道实例
    */
-  function createPipelineForChild(childId) {
+  function createPipelineForChild(childId, sessionId) {
     const asr = createASREngine({
       type: options.asrType || 'mock',
       childMode: true,
@@ -155,10 +169,8 @@ function createWSServer(options = {}) {
 
     // 对话处理函数：连接到现有对话引擎
     const dialogHandler = async (text) => {
-      // 根据文本内容决定回复和语气
-      const session = sessionManager.getSession(
-        [...pipelines.keys()].find(k => pipelines.get(k) === pipeline) || ''
-      );
+      // 直接使用闭包捕获的 sessionId（避免 O(n) 遍历 Map 反查）
+      const session = sessionManager.getSession(sessionId);
 
       // 简单对话逻辑（后续可替换为LLM）
       let replyText = '';
@@ -205,7 +217,7 @@ function createWSServer(options = {}) {
 
     // 创建会话和管道
     const session = sessionManager.createSession(childId);
-    const pipeline = createPipelineForChild(childId);
+    const pipeline = createPipelineForChild(childId, session.id);
     pipelines.set(session.id, pipeline);
 
     // Issue #21: 检查孩子是否已完成第一次见面（有已保存画像）
@@ -224,14 +236,14 @@ function createWSServer(options = {}) {
 
     // 监听管道事件
     pipeline.on(PIPELINE_EVENTS.INTERRUPTED, () => {
-      ws.send(JSON.stringify({ type: 'interrupt_ack', interrupted: true }));
+      safeSend(ws, { type: 'interrupt_ack', interrupted: true });
     });
 
     pipeline.on(PIPELINE_EVENTS.FALLBACK, (data) => {
-      ws.send(JSON.stringify({
+      safeSend(ws, {
         type: 'fallback',
         fallbackLine: data.fallbackLine
-      }));
+      });
     });
 
     // 处理消息
@@ -246,6 +258,8 @@ function createWSServer(options = {}) {
 
     ws.on('close', () => {
       console.log(`语音WebSocket连接已关闭，session: ${session.id}`);
+      // 会话结束时持久化情感连接指标到 DB（Issue #28）
+      sessionManager.endSession(session.id, db);
       pipelines.delete(session.id);
     });
 
@@ -262,20 +276,20 @@ function createWSServer(options = {}) {
    */
   function handleFirstMeetingConnection(ws, session) {
     // 发送初始状态
-    ws.send(JSON.stringify({
+    safeSend(ws, {
       type: 'session_start',
       sessionId: session.id,
       stepInfo: session.fsm.getStepInfo()
-    }));
+    });
 
     // 自动触发步骤1出场台词
     const appearanceDialog = getStepDialog('APPEARANCE', REACTION_TYPES.QUICK);
-    ws.send(JSON.stringify({
+    safeSend(ws, {
       type: 'fox_dialog',
       step: 'APPEARANCE',
       dialog: appearanceDialog,
       stepInfo: session.fsm.getStepInfo()
-    }));
+    });
 
     // Issue #22 修复：不再在此处提前转换到 HELP_REQUEST
     // 保留 APPEARANCE 状态，等待孩子的第一条反应（HESITANT/SILENT/QUICK），
@@ -296,11 +310,11 @@ function createWSServer(options = {}) {
     session.childProfile = childProfile;
 
     // 发送初始状态
-    ws.send(JSON.stringify({
+    safeSend(ws, {
       type: 'session_start',
       sessionId: session.id,
       stepInfo: { state: 'DAILY_MEETING', currentStep: 0, description: '每日见面' }
-    }));
+    });
 
     try {
       // 使用每日见面编排器生成开场
@@ -317,15 +331,15 @@ function createWSServer(options = {}) {
 
       if (result.error) {
         // 降级：出错时仍发送开场文本
-        ws.send(JSON.stringify({
+        safeSend(ws, {
           type: 'fox_dialog',
           step: 'DAILY_MEETING',
           dialog: { mainLine: `${childProfile.nickname || '小伙伴'}！快过来，我发现了一件事！`, followUp: null },
           stepInfo: { state: 'DAILY_MEETING', currentStep: 0, description: '每日见面' },
           error: result.error
-        }));
+        });
       } else {
-        ws.send(JSON.stringify({
+        safeSend(ws, {
           type: 'fox_dialog',
           step: 'DAILY_MEETING',
           dialog: { mainLine: result.openingText, followUp: null },
@@ -334,17 +348,17 @@ function createWSServer(options = {}) {
           storyStage: result.storyStage,
           tonePhase: result.tonePhase,
           memoryAnchor: result.memoryAnchor
-        }));
+        });
       }
     } catch (err) {
       // 降级：异常时发送简单开场
-      ws.send(JSON.stringify({
+      safeSend(ws, {
         type: 'fox_dialog',
         step: 'DAILY_MEETING',
         dialog: { mainLine: `${childProfile.nickname || '小伙伴'}！快过来，我发现了一件事！`, followUp: null },
         stepInfo: { state: 'DAILY_MEETING', currentStep: 0, description: '每日见面' },
         error: err.message
-      }));
+      });
     }
   }
 
@@ -373,7 +387,7 @@ function createWSServer(options = {}) {
           const result = await pipeline.processAudio(audioBuffer);
 
           if (result.replyAudio) {
-            ws.send(JSON.stringify({
+            safeSend(ws, {
               type: 'voice_reply',
               replyText: result.replyText,
               emotion: result.emotion,
@@ -381,7 +395,7 @@ function createWSServer(options = {}) {
               latencyBreakdown: result.latencyBreakdown,
               fallback: result.fallback || false,
               audio: result.replyAudio.toString('base64')
-            }));
+            });
           }
         } catch (err) {
           sendError(ws, err.message);
@@ -418,7 +432,7 @@ function createWSServer(options = {}) {
           if (result.hints !== undefined) message.hints = result.hints;
           if (result.hintLine !== undefined) message.hintLine = result.hintLine;
 
-          ws.send(JSON.stringify(message));
+          safeSend(ws, message);
         } catch (err) {
           sendError(ws, err.message);
         }
@@ -434,15 +448,15 @@ function createWSServer(options = {}) {
       case 'latency_stats': {
         // 查询延迟统计
         const stats = pipeline.getLatencyStats();
-        ws.send(JSON.stringify({
+        safeSend(ws, {
           type: 'latency_stats',
           stats
-        }));
+        });
         break;
       }
 
       case 'ping': {
-        ws.send(JSON.stringify({ type: 'pong' }));
+        safeSend(ws, { type: 'pong' });
         break;
       }
 
@@ -453,14 +467,14 @@ function createWSServer(options = {}) {
           if (!session) return;
           const bc = getOrCreateBorrowContract(session);
           const status = bc.orchestrator.getContractStatus();
-          ws.send(JSON.stringify({
+          safeSend(ws, {
             type: 'borrow_status',
             refusalCount: status.refusalCount,
             currentState: status.currentState,
             shouldTriggerBorrow: status.shouldTriggerBorrow,
             borrowPoints: status.borrowPoints,
             winPoints: status.winPoints
-          }));
+          });
         } catch (err) {
           sendError(ws, err.message);
         }
@@ -477,24 +491,24 @@ function createWSServer(options = {}) {
           // 已达阈值（跨会话恢复或本会话累计）→ 直接触发契约提案（第 4 次会议语义）
           if (status.shouldTriggerBorrow) {
             const proposal = bc.orchestrator.triggerContract();
-            ws.send(JSON.stringify({
+            safeSend(ws, {
               type: 'borrow_contract_proposal',
               dialogue: proposal.dialogue,
               borrowPoints: proposal.borrowPoints,
               winPoints: proposal.winPoints,
               refusalCount: status.refusalCount
-            }));
+            });
             return;
           }
 
           const refusalType = classifyRefusalType(payload?.content);
           if (refusalType === 'neutral') {
-            ws.send(JSON.stringify({
+            safeSend(ws, {
               type: 'borrow_state_update',
               refusalCount: status.refusalCount,
               currentState: status.currentState,
               shouldTriggerBorrow: false
-            }));
+            });
             return;
           }
 
@@ -503,22 +517,22 @@ function createWSServer(options = {}) {
 
           if (result.shouldTriggerBorrow) {
             const proposal = bc.orchestrator.triggerContract();
-            ws.send(JSON.stringify({
+            safeSend(ws, {
               type: 'borrow_contract_proposal',
               dialogue: proposal.dialogue,
               borrowPoints: proposal.borrowPoints,
               winPoints: proposal.winPoints,
               refusalCount: result.refusalCount
-            }));
+            });
           } else {
-            ws.send(JSON.stringify({
+            safeSend(ws, {
               type: 'borrow_state_update',
               refusalCount: result.refusalCount,
               currentState: result.currentState,
               shouldTriggerBorrow: false,
               shouldEndSession: result.shouldEndSession || false,
               shouldReduceDifficulty: result.shouldReduceDifficulty || false
-            }));
+            });
           }
         } catch (err) {
           sendError(ws, err.message);
@@ -533,7 +547,7 @@ function createWSServer(options = {}) {
           const bc = getOrCreateBorrowContract(session);
           const result = bc.orchestrator.acceptContract();
           persistBorrow(session);
-          ws.send(JSON.stringify({ type: 'borrow_contract_accepted', dialogue: result.dialogue }));
+          safeSend(ws, { type: 'borrow_contract_accepted', dialogue: result.dialogue });
         } catch (err) {
           sendError(ws, err.message);
         }
@@ -547,11 +561,11 @@ function createWSServer(options = {}) {
           const bc = getOrCreateBorrowContract(session);
           const result = bc.orchestrator.rejectContract();
           persistBorrow(session);
-          ws.send(JSON.stringify({
+          safeSend(ws, {
             type: 'borrow_contract_rejected',
             dialogue: result.dialogue,
             refusalCount: bc.orchestrator.getContractStatus().refusalCount
-          }));
+          });
         } catch (err) {
           sendError(ws, err.message);
         }
@@ -567,14 +581,14 @@ function createWSServer(options = {}) {
           // 对赌结束后重置计数器，开启新一轮追踪
           bc.orchestrator.reset();
           persistBorrow(session);
-          ws.send(JSON.stringify({
+          safeSend(ws, {
             type: 'borrow_contract_completed',
             outcome: result.outcome,
             dialogue: result.dialogue,
             points: result.points,
             storyUnlocked: result.storyUnlocked || false,
             funnyTask: result.funnyTask || null
-          }));
+          });
         } catch (err) {
           sendError(ws, err.message);
         }
@@ -588,7 +602,7 @@ function createWSServer(options = {}) {
           const bc = getOrCreateBorrowContract(session);
           const result = bc.orchestrator.handleChangedMind();
           persistBorrow(session);
-          ws.send(JSON.stringify({ type: 'borrow_contract_changed_mind', dialogue: result.dialogue }));
+          safeSend(ws, { type: 'borrow_contract_changed_mind', dialogue: result.dialogue });
         } catch (err) {
           sendError(ws, err.message);
         }

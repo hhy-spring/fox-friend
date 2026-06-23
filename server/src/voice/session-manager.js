@@ -66,6 +66,19 @@ function createSessionManager(db = null) {
   // 内存存储（MVP 阶段替代 Redis，架构文档§九技术债务：日活>100 时迁移）
   const sessions = new Map();
 
+  // TTL 定期清理：每 5 分钟扫描过期会话（架构文档要求 TTL=30min）
+  const SESSION_TTL_MS = 30 * 60 * 1000;
+  const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+  const cleanupTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [id, session] of sessions) {
+      if (now - session.createdAt > SESSION_TTL_MS) {
+        sessions.delete(id);
+      }
+    }
+  }, CLEANUP_INTERVAL_MS);
+  if (cleanupTimer.unref) cleanupTimer.unref();
+
   return {
     /**
      * 创建新会话
@@ -160,6 +173,9 @@ function createSessionManager(db = null) {
         }
       }
 
+      // 清理会话内存（防止内存泄漏）
+      sessions.delete(sessionId);
+
       return { success: true, metricsPersisted };
     }
   };
@@ -232,9 +248,10 @@ function handleFeynmanTriggerState(session, sessionManager, sessionId, message, 
  *
  * @param {object} session - 会话对象
  * @param {string} reaction - 反应类型
+ * @param {string} messageContent - 孩子消息内容
  * @returns {object|null} 处理结果，null 表示未处理
  */
-function handlePartnerConfirmState(session, reaction) {
+function handlePartnerConfirmState(session, reaction, messageContent) {
   // 获取或创建搭档编排器
   if (!session.partnerOrchestrator) {
     const { foxName, interestType } = getSessionContext(session);
@@ -256,7 +273,7 @@ function handlePartnerConfirmState(session, reaction) {
 
   // 编排器处于 AWAIT_RESPONSE 状态 → 处理孩子反应
   if (partner.getState() === 'AWAIT_RESPONSE') {
-    const response = partner.processChildResponse(session._lastMessageContent || '');
+    const response = partner.processChildResponse(messageContent || '');
     const isComplete = partner.isComplete();
     return {
       dialog: response,
@@ -464,8 +481,7 @@ function handleVoiceMessage(sessionManager, sessionId, message) {
 
   // 步骤5：搭档确认（Agent 3）
   if (currentState === DIALOG_STATES.PARTNER_CONFIRM) {
-    session._lastMessageContent = message.content || '';
-    const result = handlePartnerConfirmState(session, reaction);
+    const result = handlePartnerConfirmState(session, reaction, message.content || '');
     if (result) return result;
   }
 

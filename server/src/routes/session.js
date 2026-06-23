@@ -27,7 +27,8 @@ router.post('/', (req, res) => {
     ).run(id, child_id || null);
     res.status(201).json({ id, child_id, status: 'active' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('创建会话失败:', err.message);
+    res.status(500).json({ error: '服务器内部错误' });
   }
 });
 

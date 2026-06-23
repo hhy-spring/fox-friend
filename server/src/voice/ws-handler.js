@@ -23,6 +23,17 @@ const sessionManager = createSessionManager();
 const sessionPipelines = new Map();
 
 /**
+ * 安全发送 WebSocket 消息（检查连接状态，避免连接关闭后发送抛异常）
+ * @param {WebSocket} ws
+ * @param {object} data - 待发送的对象（会自动 JSON.stringify）
+ */
+function safeSend(ws, data) {
+  if (ws.readyState === ws.OPEN) {
+    ws.send(JSON.stringify(data));
+  }
+}
+
+/**
  * 为会话创建语音管道
  * @param {string} sessionId
  * @returns {object} 语音管道实例
@@ -81,20 +92,20 @@ function handleConnection(ws, req, db = null) {
   const pipeline = createPipelineForSession(session.id);
 
   // 发送初始状态
-  ws.send(JSON.stringify({
+  safeSend(ws, {
     type: 'session_start',
     sessionId: session.id,
     stepInfo: session.fsm.getStepInfo()
-  }));
+  });
 
   // 自动触发步骤1出场台词
   const appearanceDialog = getStepDialog('APPEARANCE', REACTION_TYPES.QUICK);
-  ws.send(JSON.stringify({
+  safeSend(ws, {
     type: 'fox_dialog',
     step: 'APPEARANCE',
     dialog: appearanceDialog,
     stepInfo: session.fsm.getStepInfo()
-  }));
+  });
 
   // Issue #22 修复：不再在此处提前转换到 HELP_REQUEST
   // 保留 APPEARANCE 状态，等待孩子的第一条反应（HESITANT/SILENT/QUICK），
@@ -102,11 +113,11 @@ function handleConnection(ws, req, db = null) {
 
   // 监听管道事件
   pipeline.on(PIPELINE_EVENTS.INTERRUPTED, () => {
-    ws.send(JSON.stringify({ type: 'interrupt_ack', interrupted: true }));
+    safeSend(ws, { type: 'interrupt_ack', interrupted: true });
   });
 
   pipeline.on(PIPELINE_EVENTS.FALLBACK, (data) => {
-    ws.send(JSON.stringify({ type: 'fallback', fallbackLine: data.fallbackLine }));
+    safeSend(ws, { type: 'fallback', fallbackLine: data.fallbackLine });
   });
 
   ws.on('message', (data) => {
@@ -114,7 +125,7 @@ function handleConnection(ws, req, db = null) {
       const message = JSON.parse(data.toString());
       handleMessage(ws, session.id, pipeline, message);
     } catch (err) {
-      ws.send(JSON.stringify({ type: 'error', message: '消息格式错误' }));
+      safeSend(ws, { type: 'error', message: '消息格式错误' });
     }
   });
 
@@ -150,7 +161,7 @@ async function handleMessage(ws, sessionId, pipeline, message) {
           content: payload?.content || ''
         });
 
-        ws.send(JSON.stringify({
+        safeSend(ws, {
           type: 'fox_dialog',
           step: result.nextState,
           dialog: result.dialog,
@@ -162,9 +173,9 @@ async function handleMessage(ws, sessionId, pipeline, message) {
             hintLine: result.hintLine
           },
           stepInfo: result.stepInfo
-        }));
+        });
       } catch (err) {
-        ws.send(JSON.stringify({ type: 'error', message: err.message }));
+        safeSend(ws, { type: 'error', message: err.message });
       }
       break;
 
@@ -173,7 +184,7 @@ async function handleMessage(ws, sessionId, pipeline, message) {
       try {
         const audioBase64 = payload?.audio;
         if (!audioBase64) {
-          ws.send(JSON.stringify({ type: 'error', message: '缺少音频数据' }));
+          safeSend(ws, { type: 'error', message: '缺少音频数据' });
           return;
         }
 
@@ -181,7 +192,7 @@ async function handleMessage(ws, sessionId, pipeline, message) {
         const result = await pipeline.processAudio(audioBuffer);
 
         if (result.replyAudio) {
-          ws.send(JSON.stringify({
+          safeSend(ws, {
             type: 'voice_reply',
             replyText: result.replyText,
             emotion: result.emotion,
@@ -189,10 +200,10 @@ async function handleMessage(ws, sessionId, pipeline, message) {
             latencyBreakdown: result.latencyBreakdown,
             fallback: result.fallback || false,
             audio: result.replyAudio.toString('base64')
-          }));
+          });
         }
       } catch (err) {
-        ws.send(JSON.stringify({ type: 'error', message: err.message }));
+        safeSend(ws, { type: 'error', message: err.message });
       }
       break;
 
@@ -203,18 +214,18 @@ async function handleMessage(ws, sessionId, pipeline, message) {
 
     case 'latency_stats':
       // 查询延迟统计
-      ws.send(JSON.stringify({
+      safeSend(ws, {
         type: 'latency_stats',
         stats: pipeline.getLatencyStats()
-      }));
+      });
       break;
 
     case 'ping':
-      ws.send(JSON.stringify({ type: 'pong' }));
+      safeSend(ws, { type: 'pong' });
       break;
 
     default:
-      ws.send(JSON.stringify({ type: 'error', message: `未知消息类型: ${type}` }));
+      safeSend(ws, { type: 'error', message: `未知消息类型: ${type}` });
   }
 }
 

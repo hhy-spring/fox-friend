@@ -40,9 +40,20 @@ router.post('/', (req, res) => {
       fox_name_source
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('创建画像失败:', err.message);
+    res.status(500).json({ error: '服务器内部错误' });
   }
 });
+
+// 安全解析 JSON 字段，解析失败返回 null
+function safeJsonParse(str) {
+  if (!str) return null;
+  try {
+    return JSON.parse(str);
+  } catch {
+    return null;
+  }
+}
 
 // 获取画像
 router.get('/:id', (req, res) => {
@@ -55,9 +66,9 @@ router.get('/:id', (req, res) => {
     return res.status(404).json({ error: '画像不存在' });
   }
 
-  // 解析 JSON 字段
-  if (profile.interests) profile.interests = JSON.parse(profile.interests);
-  if (profile.self_claimed_skills) profile.self_claimed_skills = JSON.parse(profile.self_claimed_skills);
+  // 解析 JSON 字段（防御性解析，避免非法 JSON 导致 500）
+  profile.interests = safeJsonParse(profile.interests);
+  profile.self_claimed_skills = safeJsonParse(profile.self_claimed_skills);
 
   res.json(profile);
 });

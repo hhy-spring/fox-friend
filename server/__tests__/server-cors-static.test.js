@@ -31,30 +31,43 @@ describe('服务器 CORS 与静态文件服务 - Issue #29', () => {
   });
 
   describe('CORS 支持', () => {
-    test('GET /health 响应应包含 Access-Control-Allow-Origin 头', async () => {
-      const res = await request(app).get('/health');
+    // 使用白名单内的 Origin（index.js 默认允许 localhost:5173 和 localhost:3000）
+    const ALLOWED_ORIGIN = 'http://localhost:5173';
 
-      expect(res.status).toBe(200);
-      expect(res.headers['access-control-allow-origin']).toBeDefined();
-    });
-
-    test('带 Origin 头的请求应返回 Access-Control-Allow-Origin: *', async () => {
+    test('GET /health 带白名单 Origin 时应包含 Access-Control-Allow-Origin 头', async () => {
       const res = await request(app)
         .get('/health')
-        .set('Origin', 'http://localhost:8080');
+        .set('Origin', ALLOWED_ORIGIN);
 
-      expect(res.headers['access-control-allow-origin']).toBe('*');
+      expect(res.status).toBe(200);
+      expect(res.headers['access-control-allow-origin']).toBe(ALLOWED_ORIGIN);
+    });
+
+    test('带白名单 Origin 的请求应返回对应的 Access-Control-Allow-Origin', async () => {
+      const res = await request(app)
+        .get('/health')
+        .set('Origin', ALLOWED_ORIGIN);
+
+      expect(res.headers['access-control-allow-origin']).toBe(ALLOWED_ORIGIN);
+    });
+
+    test('非白名单 Origin 的请求不应返回 Access-Control-Allow-Origin 头', async () => {
+      const res = await request(app)
+        .get('/health')
+        .set('Origin', 'http://evil-site.com');
+
+      expect(res.headers['access-control-allow-origin']).toBeUndefined();
     });
 
     test('OPTIONS 预检请求应返回 204 并包含完整 CORS 头', async () => {
       const res = await request(app)
         .options('/api/profile')
-        .set('Origin', 'http://localhost:8080')
+        .set('Origin', ALLOWED_ORIGIN)
         .set('Access-Control-Request-Method', 'POST')
         .set('Access-Control-Request-Headers', 'Content-Type');
 
       expect(res.status).toBe(204);
-      expect(res.headers['access-control-allow-origin']).toBeDefined();
+      expect(res.headers['access-control-allow-origin']).toBe(ALLOWED_ORIGIN);
       expect(res.headers['access-control-allow-methods']).toBeDefined();
       expect(res.headers['access-control-allow-headers']).toBeDefined();
     });
@@ -62,7 +75,7 @@ describe('服务器 CORS 与静态文件服务 - Issue #29', () => {
     test('CORS 应允许常见 HTTP 方法（GET、POST、PUT、DELETE）', async () => {
       const res = await request(app)
         .options('/api/profile')
-        .set('Origin', 'http://localhost:8080')
+        .set('Origin', ALLOWED_ORIGIN)
         .set('Access-Control-Request-Method', 'POST');
 
       const methods = res.headers['access-control-allow-methods'] || '';
@@ -75,7 +88,7 @@ describe('服务器 CORS 与静态文件服务 - Issue #29', () => {
     test('CORS 应允许 Content-Type 请求头', async () => {
       const res = await request(app)
         .options('/api/profile')
-        .set('Origin', 'http://localhost:8080')
+        .set('Origin', ALLOWED_ORIGIN)
         .set('Access-Control-Request-Headers', 'Content-Type');
 
       const allowedHeaders = (res.headers['access-control-allow-headers'] || '').toLowerCase();
@@ -85,9 +98,9 @@ describe('服务器 CORS 与静态文件服务 - Issue #29', () => {
     test('API 路由响应也应包含 CORS 头（跨域访问核心场景）', async () => {
       const res = await request(app)
         .get('/api/profile/nonexistent')
-        .set('Origin', 'http://localhost:8080');
+        .set('Origin', ALLOWED_ORIGIN);
 
-      expect(res.headers['access-control-allow-origin']).toBe('*');
+      expect(res.headers['access-control-allow-origin']).toBe(ALLOWED_ORIGIN);
     });
   });
 

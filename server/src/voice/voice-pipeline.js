@@ -28,6 +28,9 @@ const FALLBACK_LINES = [
   '等一下哦，我在想...'
 ];
 
+// 延迟历史最大记录数，超出时移除最早记录（防止内存泄漏）
+const MAX_LATENCY_HISTORY = 1000;
+
 // 管道状态
 const PIPELINE_STATES = {
   IDLE: 'IDLE',
@@ -146,8 +149,11 @@ function createVoicePipeline(options = {}) {
 
       const totalLatencyMs = Date.now() - pipelineStart;
 
-      // 记录延迟
+      // 记录延迟（限制最大长度，防止内存泄漏）
       latencyHistory.push(totalLatencyMs);
+      if (latencyHistory.length > MAX_LATENCY_HISTORY) {
+        latencyHistory.shift();
+      }
 
       state = PIPELINE_STATES.IDLE;
 

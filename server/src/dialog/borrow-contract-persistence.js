@@ -13,6 +13,20 @@
 const fs = require('fs');
 const path = require('path');
 
+// childId 合法格式：UUID 或字母数字+连字符，禁止路径分隔符（防路径遍历）
+const CHILD_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+
+/**
+ * 校验 childId 格式，防止路径遍历攻击
+ * @param {string} childId
+ * @throws {Error} 格式非法时抛错
+ */
+function validateChildId(childId) {
+  if (!childId || typeof childId !== 'string' || !CHILD_ID_PATTERN.test(childId)) {
+    throw new Error('非法的 childId 格式');
+  }
+}
+
 /**
  * 创建借分契约持久化实例
  * @param {object} [options]
@@ -42,6 +56,7 @@ function createBorrowContractPersistence(options = {}) {
      * @returns {{ refusalCount: number, currentState: string, lastUpdated: string } | null} 无记录时返回 null
      */
     loadState(childId) {
+      validateChildId(childId);
       const filePath = getFilePath(childId);
 
       // 文件不存在时返回 null（不抛错）
@@ -67,6 +82,7 @@ function createBorrowContractPersistence(options = {}) {
      * @returns {{ success: boolean, path: string, timestamp: string }}
      */
     saveState(childId, state) {
+      validateChildId(childId);
       const filePath = getFilePath(childId);
 
       // 如果目录不存在，自动创建
@@ -98,6 +114,7 @@ function createBorrowContractPersistence(options = {}) {
      * @returns {{ success: boolean, path: string }} 即使文件不存在也返回 success:true
      */
     resetState(childId) {
+      validateChildId(childId);
       const filePath = getFilePath(childId);
 
       // 文件存在则删除，不存在也视为成功
@@ -113,4 +130,4 @@ function createBorrowContractPersistence(options = {}) {
   };
 }
 
-module.exports = { createBorrowContractPersistence };
+module.exports = { createBorrowContractPersistence, validateChildId };

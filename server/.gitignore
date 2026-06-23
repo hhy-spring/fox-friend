@@ -5,3 +5,5 @@ data/
 *.db-shm
 coverage/
 .env
+.worktrees/
+server/public/

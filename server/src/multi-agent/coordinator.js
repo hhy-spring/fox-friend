@@ -83,6 +83,9 @@ function createCoordinator(options = {}) {
       task.durationMs = task.completedAt - task.startedAt;
       results.set(task.id, result);
 
+      // 事件驱动：直接 resolve 等待中的 Promise（替代忙等待轮询）
+      if (task.resolve) task.resolve(result);
+
       messageBus.publish({
         type: MESSAGE_TYPES.TASK_RESULT,
         from: agent.id,
@@ -93,6 +96,8 @@ function createCoordinator(options = {}) {
     } catch (error) {
       task.state = TASK_STATES.FAILED;
       task.error = error.message;
+      // 事件驱动：直接 reject 等待中的 Promise
+      if (task.reject) task.reject(error);
       messageBus.publishError(agent.id, 'coordinator', error, message.correlationId);
     }
   }
@@ -224,7 +229,7 @@ function createCoordinator(options = {}) {
   }
 
   /**
-   * 执行单个子任务
+   * 执行单个子任务（事件驱动，无忙等待轮询）
    */
   async function executeSubtask(task) {
     tasks.set(task.id, {
@@ -246,25 +251,32 @@ function createCoordinator(options = {}) {
       payload: { taskId: task.id, input: task.input }
     });
 
-    // 等待任务完成（通过 Promise）
+    // 事件驱动：将 resolve/reject 存入 task 对象，由 handleAgentTask 完成时直接调用
     return new Promise((resolve, reject) => {
+      const taskEntry = tasks.get(task.id);
+      // 若任务已同步完成（边缘情况），直接返回
+      if (taskEntry.state === TASK_STATES.COMPLETED) {
+        resolve(results.get(task.id));
+        return;
+      }
+      if (taskEntry.state === TASK_STATES.FAILED) {
+        reject(new Error(taskEntry.error));
+        return;
+      }
+
       const timeout = setTimeout(() => {
         reject(new Error(`任务 ${task.id} 超时`));
       }, 30000);
+      if (timeout.unref) timeout.unref();
 
-      const checkComplete = () => {
-        const t = tasks.get(task.id);
-        if (t && t.state === TASK_STATES.COMPLETED) {
-          clearTimeout(timeout);
-          resolve(results.get(task.id));
-        } else if (t && t.state === TASK_STATES.FAILED) {
-          clearTimeout(timeout);
-          reject(new Error(t.error));
-        } else {
-          setTimeout(checkComplete, 10);
-        }
+      taskEntry.resolve = (result) => {
+        clearTimeout(timeout);
+        resolve(result);
       };
-      checkComplete();
+      taskEntry.reject = (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      };
     });
   }
 

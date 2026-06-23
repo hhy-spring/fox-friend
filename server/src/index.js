@@ -15,11 +15,19 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 
 // CORS 支持（Issue #29：前端 Vue3 SPA 跨域访问 API）
-// 参考技术架构文档§二：前端 Vue3 SPA + 后端 Express.js
+// 使用白名单替代通配符 *，防止任意网站读取孩子画像隐私数据
+const ALLOWED_ORIGINS = (process.env.CORS_ALLOWED_ORIGINS || 'http://localhost:5173,http://localhost:3000')
+  .split(',')
+  .map(s => s.trim());
+
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  const origin = req.headers.origin;
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Vary', 'Origin');
+  }
 
   // 处理预检请求
   if (req.method === 'OPTIONS') {
@@ -31,6 +39,11 @@ app.use((req, res, next) => {
 
 // 静态文件服务（Issue #29：托管前端界面）
 app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// 初始化数据库（在路由注册之前完成，确保路由 handler 可访问 db）
+const dbPath = path.join(__dirname, '..', 'data', 'fox-friend.db');
+const db = initDB(dbPath);
+app.set('db', db);
 
 // 路由
 app.use('/api/session', sessionRouter);
@@ -50,24 +63,22 @@ app.get('*', (req, res, next) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
 
-// 初始化数据库
-const dbPath = path.join(__dirname, '..', 'data', 'fox-friend.db');
-const db = initDB(dbPath);
-
-// 将 db 实例挂载到 app 上，供路由使用
-app.set('db', db);
-
 // 创建 HTTP 服务器
 const server = http.createServer(app);
 
 // 创建 WebSocket 服务器
 const wss = new WebSocketServer({ server });
 
-// WebSocket 连接处理
+// WebSocket 连接处理（使用功能完整的 ws-voice-handler，支持每日见面 + 借分契约）
 // 参考技术架构文档§四：WS `/ws/voice/{child_id}`
+const { createWSServer } = require('./voice/ws-voice-handler');
+const wsServer = createWSServer({
+  db,
+  storageDir: path.join(__dirname, '..', 'data')
+});
+
 wss.on('connection', (ws, req) => {
-  const { handleConnection } = require('./voice/ws-handler');
-  handleConnection(ws, req, db);
+  wsServer.handleVoiceConnection(ws, req);
 });
 
 // 启动服务器

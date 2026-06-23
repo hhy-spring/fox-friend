@@ -1,0 +1,35 @@
+{
+  "sequential": {
+    "totalMs": 11660,
+    "taskA": {
+      "success": true,
+      "duration": 3703
+    },
+    "taskB": {
+      "success": true,
+      "duration": 3686
+    },
+    "taskC": {
+      "success": true,
+      "duration": 4271
+    }
+  },
+  "parallel": {
+    "totalMs": 5045,
+    "taskA": {
+      "success": true,
+      "duration": 4211
+    },
+    "taskB": {
+      "success": true,
+      "duration": 4393
+    },
+    "taskC": {
+      "success": true,
+      "duration": 4968
+    }
+  },
+  "speedupPercent": 56.7,
+  "accuracyPercent": 100,
+  "passed": true
+}

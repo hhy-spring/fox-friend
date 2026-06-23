@@ -17,6 +17,8 @@ const { getNameHints, getNameHintsLine } = require('../dialog/name-hints');
 const { processChildInput } = require('../dialog/name-processor');
 const { createNamingCeremony } = require('../dialog/naming-ceremony');
 const { classifyInterest } = require('../dialog/interest-classifier');
+const { createMetricsTracker } = require('../dialog/metrics-tracker');
+const { mergeMetrics } = require('../dialog/metrics-repository');
 
 /**
  * 根据狐狸名字推导兴趣类型
@@ -55,9 +57,10 @@ function createCeremonyForSession(session, foxName, nameSource) {
 
 /**
  * 创建会话管理器
+ * @param {object} [db] - 数据库实例（better-sqlite3），用于会话结束时持久化指标
  * @returns {object} 会话管理器实例
  */
-function createSessionManager() {
+function createSessionManager(db = null) {
   // 内存存储（MVP 阶段替代 Redis，架构文档§九技术债务：日活>100 时迁移）
   const sessions = new Map();
 
@@ -77,6 +80,7 @@ function createSessionManager() {
         fsmState: fsm.getState(),
         profile: {},
         proactiveSpeechCount: 0,
+        metricsTracker: createMetricsTracker(id, childId),
         createdAt: Date.now()
       };
       sessions.set(id, session);
@@ -126,6 +130,35 @@ function createSessionManager() {
       if (session) {
         session.proactiveSpeechCount += 1;
       }
+    },
+
+    /**
+     * 结束会话，将情感连接指标持久化到 DB（Issue #28）
+     * @param {string} sessionId
+     * @param {object} [externalDb] - 外部传入的 DB 实例（优先于构造时的 db）
+     * @returns {{ success: boolean, metricsPersisted: boolean }}
+     */
+    endSession(sessionId, externalDb = null) {
+      const session = sessions.get(sessionId);
+      if (!session) {
+        return { success: false, metricsPersisted: false };
+      }
+
+      const dbToUse = externalDb || db;
+      let metricsPersisted = false;
+      // 有 DB 且有 childId 时持久化指标
+      if (dbToUse && session.childId) {
+        try {
+          const metricsField = session.metricsTracker.toProfileField();
+          mergeMetrics(dbToUse, session.childId, metricsField.first_meeting_reactions);
+          metricsPersisted = true;
+        } catch (err) {
+          // 持久化失败不阻断会话结束
+          console.error('指标持久化失败:', err.message);
+        }
+      }
+
+      return { success: true, metricsPersisted };
     }
   };
 }
@@ -154,9 +187,10 @@ function handleVoiceMessage(sessionManager, sessionId, message) {
     content: message.content || ''
   });
 
-  // 有实质内容 → 递增主动说话次数
+  // 有实质内容 → 递增主动说话次数 + 记录到指标追踪器（Issue #28）
   if (message.content && message.content.trim().length > 0) {
     sessionManager.incrementProactiveSpeech(sessionId);
+    session.metricsTracker.recordSpeech(message.content);
   }
 
   // 步骤1：出场

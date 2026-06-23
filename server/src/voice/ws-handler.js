@@ -65,8 +65,9 @@ function createPipelineForSession(sessionId) {
  * 处理新的 WebSocket 连接
  * @param {WebSocket} ws - WebSocket 连接实例
  * @param {object} req - HTTP 请求对象（含 URL 参数）
+ * @param {object} [db] - 数据库实例（用于会话结束时持久化指标，Issue #28）
  */
-function handleConnection(ws, req) {
+function handleConnection(ws, req, db = null) {
   // 从 URL 中提取 child_id: /ws/voice/{child_id}
   const urlParts = req?.url?.split('/') || [];
   const childId = urlParts[urlParts.length - 1] || 'unknown';
@@ -119,6 +120,8 @@ function handleConnection(ws, req) {
 
   ws.on('close', () => {
     console.log(`WebSocket 连接已关闭，session: ${session.id}`);
+    // 会话结束时持久化情感连接指标到 DB（Issue #28）
+    sessionManager.endSession(session.id, db);
     sessionPipelines.delete(session.id);
   });
 

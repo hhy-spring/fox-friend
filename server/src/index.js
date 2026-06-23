@@ -5,6 +5,7 @@ const path = require('path');
 const { initDB } = require('./db/init');
 const sessionRouter = require('./routes/session');
 const profileRouter = require('./routes/profile');
+const metricsRouter = require('./routes/metrics');
 
 // 创建 Express 应用
 const app = express();
@@ -34,6 +35,7 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 // 路由
 app.use('/api/session', sessionRouter);
 app.use('/api/profile', profileRouter);
+app.use('/api/profile', metricsRouter);
 
 // 健康检查
 app.get('/health', (req, res) => {
@@ -65,7 +67,7 @@ const wss = new WebSocketServer({ server });
 // 参考技术架构文档§四：WS `/ws/voice/{child_id}`
 wss.on('connection', (ws, req) => {
   const { handleConnection } = require('./voice/ws-handler');
-  handleConnection(ws, req);
+  handleConnection(ws, req, db);
 });
 
 // 启动服务器

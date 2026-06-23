@@ -13,6 +13,9 @@ const PORT = process.env.PORT || 3000;
 // 中间件
 app.use(express.json());
 
+// 静态文件服务（前端 Vue3 SPA 构建产物）
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
 // 路由
 app.use('/api/session', sessionRouter);
 app.use('/api/profile', profileRouter);
@@ -20,6 +23,14 @@ app.use('/api/profile', profileRouter);
 // 健康检查
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
+});
+
+// SPA 回退路由：所有非 API 请求返回 index.html
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api/') || req.path.startsWith('/ws/')) {
+    return next();
+  }
+  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
 
 // 初始化数据库

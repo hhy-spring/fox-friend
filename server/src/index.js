@@ -13,6 +13,24 @@ const PORT = process.env.PORT || 3000;
 // 中间件
 app.use(express.json());
 
+// CORS 支持（Issue #29：前端 Vue3 SPA 跨域访问 API）
+// 参考技术架构文档§二：前端 Vue3 SPA + 后端 Express.js
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  // 处理预检请求
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+
+  next();
+});
+
+// 静态文件服务（Issue #29：托管前端界面）
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
 // 路由
 app.use('/api/session', sessionRouter);
 app.use('/api/profile', profileRouter);

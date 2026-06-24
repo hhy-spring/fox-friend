@@ -27,6 +27,14 @@
       <span class="status-dot"></span>
       <span class="status-text">{{ connectionLabel }}</span>
     </div>
+
+    <!-- 诊断面板：帮助定位 WebSocket 连接问题 -->
+    <div v-if="showDiagnostics" class="diagnostics-panel">
+      <button class="diag-close" @click="showDiagnostics = false">×</button>
+      <h4>连接诊断</h4>
+      <pre>{{ diagnosticsInfo }}</pre>
+    </div>
+    <button v-else class="diag-toggle" @click="showDiagnostics = true">诊断</button>
   </div>
 </template>
 
@@ -43,6 +51,8 @@ const dialogText = ref('');
 const currentStoryStage = ref('appearance');
 const isConnected = ref(false);
 const connectionLabel = ref('连接中...');
+const showDiagnostics = ref(false);
+const diagnosticsInfo = ref('收集中...');
 
 const wsClient = shallowRef(null);
 let speakingTimer = null;
@@ -141,20 +151,38 @@ onMounted(() => {
   const childId = 'default-child';
   const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/voice/${childId}`;
 
+  // 收集诊断信息
+  const updateDiagnostics = (extra = {}) => {
+    const info = {
+      pageUrl: location.href,
+      pageHost: location.host,
+      pageProtocol: location.protocol,
+      wsUrl,
+      wsReadyState: wsClient.value?._ws?.readyState ?? 'N/A',
+      wsReadyStateLabel: ['CONNECTING','OPEN','CLOSING','CLOSED'][wsClient.value?._ws?.readyState] ?? 'N/A',
+      isConnected: isConnected.value,
+      ...extra
+    };
+    diagnosticsInfo.value = JSON.stringify(info, null, 2);
+  };
+
   wsClient.value = createWebSocketClient(wsUrl);
 
   wsClient.value.onConnected(() => {
     isConnected.value = true;
     connectionLabel.value = '已连接';
+    updateDiagnostics({ event: 'onConnected' });
   });
 
   wsClient.value.onDisconnected(() => {
     isConnected.value = false;
     connectionLabel.value = '重连中...';
+    updateDiagnostics({ event: 'onDisconnected' });
   });
 
-  wsClient.value.onError(() => {
+  wsClient.value.onError((error) => {
     connectionLabel.value = '连接异常，重连中...';
+    updateDiagnostics({ event: 'onError', error: String(error) });
   });
 
   wsClient.value.onMessage((message) => {
@@ -169,6 +197,7 @@ onMounted(() => {
     } else if (message.type === 'error') {
       // 服务器错误：展示友好提示
       console.warn('服务器错误:', message.message);
+      updateDiagnostics({ event: 'server_error', serverMessage: message.message });
       dialogText.value = message.message || '出了点小问题，再试一次吧';
       foxExpression.value = 'nervous';
       foxSpeaking.value = true;
@@ -176,6 +205,11 @@ onMounted(() => {
       speakingTimer = setTimeout(() => { foxSpeaking.value = false; }, 3000);
     }
   });
+
+  // 初始诊断
+  updateDiagnostics({ event: 'mounted' });
+  // 每 2 秒更新 readyState
+  setInterval(updateDiagnostics, 2000);
 });
 
 onUnmounted(() => {
@@ -295,6 +329,65 @@ defineExpose({
 .connection-status.connected .status-dot {
   background: #4caf50;
   box-shadow: 0 0 6px rgba(76, 175, 80, 0.6);
+}
+
+/* ===== 诊断面板 ===== */
+.diag-toggle {
+  position: absolute;
+  bottom: 14px;
+  left: 14px;
+  z-index: 10;
+  padding: 4px 12px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.diagnostics-panel {
+  position: absolute;
+  bottom: 14px;
+  left: 14px;
+  z-index: 20;
+  width: 420px;
+  max-height: 60vh;
+  overflow: auto;
+  padding: 14px 16px 16px;
+  background: rgba(0, 0, 0, 0.88);
+  color: #0f0;
+  border-radius: 12px;
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.diagnostics-panel h4 {
+  margin: 0 0 8px;
+  color: #fff;
+  font-size: 13px;
+}
+
+.diagnostics-panel pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.diag-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
 }
 
 /* ===== 气泡过渡动画 ===== */

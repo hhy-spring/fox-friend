@@ -25,7 +25,7 @@
 
     <div class="connection-status" :class="{ connected: isConnected }">
       <span class="status-dot"></span>
-      <span class="status-text">{{ isConnected ? '已连接' : '连接中...' }}</span>
+      <span class="status-text">{{ connectionLabel }}</span>
     </div>
   </div>
 </template>
@@ -42,6 +42,7 @@ const foxSpeaking = ref(false);
 const dialogText = ref('');
 const currentStoryStage = ref('appearance');
 const isConnected = ref(false);
+const connectionLabel = ref('连接中...');
 
 const wsClient = shallowRef(null);
 let speakingTimer = null;
@@ -110,6 +111,21 @@ function handleAudioData(audioBase64) {
   }
 }
 
+// 语音管道回复（audio 消息的响应）：展示文本 + 切换表情
+function handleVoiceReply(message) {
+  if (message.replyText) {
+    dialogText.value = message.replyText;
+  }
+  const emotion = message.emotion || 'happy';
+  if (EMOTION_TO_EXPRESSION[emotion]) {
+    foxExpression.value = EMOTION_TO_EXPRESSION[emotion];
+  }
+  foxSpeaking.value = true;
+  if (speakingTimer) clearTimeout(speakingTimer);
+  const speakDuration = Math.max(2000, (message.replyText || '').length * 150);
+  speakingTimer = setTimeout(() => { foxSpeaking.value = false; }, speakDuration);
+}
+
 function handleRecordingStart() {
   if (speakingTimer) {
     clearTimeout(speakingTimer);
@@ -129,17 +145,35 @@ onMounted(() => {
 
   wsClient.value.onConnected(() => {
     isConnected.value = true;
+    connectionLabel.value = '已连接';
   });
 
   wsClient.value.onDisconnected(() => {
     isConnected.value = false;
+    connectionLabel.value = '重连中...';
+  });
+
+  wsClient.value.onError(() => {
+    connectionLabel.value = '连接异常，重连中...';
   });
 
   wsClient.value.onMessage((message) => {
     if (message.type === 'fox_dialog') {
       handleFoxDialog(message);
+    } else if (message.type === 'voice_reply') {
+      // 语音管道回复：展示文本 + 表情
+      handleVoiceReply(message);
     } else if (message.type === 'session_start') {
       isConnected.value = true;
+      connectionLabel.value = '已连接';
+    } else if (message.type === 'error') {
+      // 服务器错误：展示友好提示
+      console.warn('服务器错误:', message.message);
+      dialogText.value = message.message || '出了点小问题，再试一次吧';
+      foxExpression.value = 'nervous';
+      foxSpeaking.value = true;
+      if (speakingTimer) clearTimeout(speakingTimer);
+      speakingTimer = setTimeout(() => { foxSpeaking.value = false; }, 3000);
     }
   });
 });

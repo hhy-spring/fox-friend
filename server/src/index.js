@@ -84,7 +84,26 @@ if (useHttps) {
 }
 
 // 创建 WebSocket 服务器
-const wss = new WebSocketServer({ server });
+// maxPayload: 50MB（音频 base64 编码后可能较大）
+// 心跳保活：防止代理/负载均衡器因超时关闭连接
+const wss = new WebSocketServer({ server, maxPayload: 50 * 1024 * 1024 });
+
+// 心跳保活：每 30 秒发送 ping，清除无响应连接
+const HEARTBEAT_INTERVAL = 30000;
+let heartbeatTimer;
+function startHeartbeat() {
+  heartbeatTimer = setInterval(() => {
+    wss.clients.forEach((ws) => {
+      if (ws.isAlive === false) {
+        console.log('心跳超时，终止连接');
+        return ws.terminate();
+      }
+      ws.isAlive = false;
+      ws.ping();
+    });
+  }, HEARTBEAT_INTERVAL);
+}
+startHeartbeat();
 
 // WebSocket 连接处理（使用功能完整的 ws-voice-handler，支持每日见面 + 借分契约）
 // 参考技术架构文档§四：WS `/ws/voice/{child_id}`
@@ -95,6 +114,8 @@ const wsServer = createWSServer({
 });
 
 wss.on('connection', (ws, req) => {
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
   wsServer.handleVoiceConnection(ws, req);
 });
 

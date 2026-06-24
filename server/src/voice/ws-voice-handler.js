@@ -256,15 +256,22 @@ function createWSServer(options = {}) {
       }
     });
 
-    ws.on('close', () => {
+    ws.on('error', (err) => {
+      // ws 库在连接关闭前消息未完成时抛出 RangeError: connection closed before message completed
+      // 这通常由网络中断、代理超时或客户端突然关闭引起
+      console.error('语音WebSocket错误:', err.message);
+    });
+
+    // 处理异常关闭（如 maxPayload 超限、网络中断）
+    ws.on('close', (code, reason) => {
+      const reasonStr = reason ? reason.toString() : '';
+      if (code !== 1000 && code !== 1001) {
+        console.error(`WebSocket异常关闭 code=${code} reason="${reasonStr}" session=${session.id}`);
+      }
       console.log(`语音WebSocket连接已关闭，session: ${session.id}`);
       // 会话结束时持久化情感连接指标到 DB（Issue #28）
       sessionManager.endSession(session.id, db);
       pipelines.delete(session.id);
-    });
-
-    ws.on('error', (err) => {
-      console.error('语音WebSocket错误:', err.message);
     });
   }
 

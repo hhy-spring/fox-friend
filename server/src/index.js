@@ -8,13 +8,15 @@ const { initDB } = require('./db/init');
 const sessionRouter = require('./routes/session');
 const profileRouter = require('./routes/profile');
 const metricsRouter = require('./routes/metrics');
+const voiceRouter = require('./routes/voice');
 
 // 创建 Express 应用
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // 中间件
-app.use(express.json());
+// 限制 50MB，支持音频 base64 上传
+app.use(express.json({ limit: '50mb' }));
 
 // CORS 支持（Issue #29：前端 Vue3 SPA 跨域访问 API）
 // 使用白名单替代通配符 *，防止任意网站读取孩子画像隐私数据
@@ -46,11 +48,13 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 const dbPath = path.join(__dirname, '..', 'data', 'fox-friend.db');
 const db = initDB(dbPath);
 app.set('db', db);
+app.set('storageDir', path.join(__dirname, '..', 'data'));
 
 // 路由
 app.use('/api/session', sessionRouter);
 app.use('/api/profile', profileRouter);
 app.use('/api/profile', metricsRouter);
+app.use('/api/voice', voiceRouter);
 
 // 健康检查
 app.get('/health', (req, res) => {

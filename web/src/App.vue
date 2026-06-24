@@ -44,6 +44,7 @@ import FoxCharacter from './components/FoxCharacter.vue';
 import SceneBackground from './components/SceneBackground.vue';
 import VoiceInput from './components/VoiceInput.vue';
 import { createWebSocketClient } from './services/websocket-client.js';
+import { createHttpVoiceClient } from './services/http-voice-client.js';
 
 const foxExpression = ref('happy');
 const foxSpeaking = ref(false);
@@ -51,6 +52,7 @@ const dialogText = ref('');
 const currentStoryStage = ref('appearance');
 const isConnected = ref(false);
 const connectionLabel = ref('连接中...');
+const transportMode = ref('ws');
 const showDiagnostics = ref(false);
 const diagnosticsInfo = ref('收集中...');
 
@@ -157,6 +159,7 @@ onMounted(() => {
       pageUrl: location.href,
       pageHost: location.host,
       pageProtocol: location.protocol,
+      mode: transportMode.value,
       wsUrl,
       wsReadyState: wsClient.value?._ws?.readyState ?? 'N/A',
       wsReadyStateLabel: ['CONNECTING','OPEN','CLOSING','CLOSED'][wsClient.value?._ws?.readyState] ?? 'N/A',
@@ -166,45 +169,66 @@ onMounted(() => {
     diagnosticsInfo.value = JSON.stringify(info, null, 2);
   };
 
-  wsClient.value = createWebSocketClient(wsUrl);
-
-  wsClient.value.onConnected(() => {
-    isConnected.value = true;
-    connectionLabel.value = '已连接';
-    updateDiagnostics({ event: 'onConnected' });
-  });
-
-  wsClient.value.onDisconnected(() => {
-    isConnected.value = false;
-    connectionLabel.value = '重连中...';
-    updateDiagnostics({ event: 'onDisconnected' });
-  });
-
-  wsClient.value.onError((error) => {
-    connectionLabel.value = '连接异常，重连中...';
-    updateDiagnostics({ event: 'onError', error: String(error) });
-  });
-
-  wsClient.value.onMessage((message) => {
-    if (message.type === 'fox_dialog') {
-      handleFoxDialog(message);
-    } else if (message.type === 'voice_reply') {
-      // 语音管道回复：展示文本 + 表情
-      handleVoiceReply(message);
-    } else if (message.type === 'session_start') {
+  // 统一的消息处理器（WebSocket 和 HTTP 共用）
+  function setupHandlers(client) {
+    client.onConnected(() => {
       isConnected.value = true;
       connectionLabel.value = '已连接';
-    } else if (message.type === 'error') {
-      // 服务器错误：展示友好提示
-      console.warn('服务器错误:', message.message);
-      updateDiagnostics({ event: 'server_error', serverMessage: message.message });
-      dialogText.value = message.message || '出了点小问题，再试一次吧';
-      foxExpression.value = 'nervous';
-      foxSpeaking.value = true;
-      if (speakingTimer) clearTimeout(speakingTimer);
-      speakingTimer = setTimeout(() => { foxSpeaking.value = false; }, 3000);
+      updateDiagnostics({ event: 'onConnected' });
+    });
+
+    client.onDisconnected(() => {
+      isConnected.value = false;
+      if (transportMode.value === 'ws') {
+        connectionLabel.value = '重连中...';
+      }
+      updateDiagnostics({ event: 'onDisconnected' });
+    });
+
+    client.onError((error) => {
+      updateDiagnostics({ event: 'onError', error: String(error) });
+    });
+
+    client.onMessage((message) => {
+      if (message.type === 'fox_dialog') {
+        handleFoxDialog(message);
+      } else if (message.type === 'voice_reply') {
+        handleVoiceReply(message);
+      } else if (message.type === 'session_start') {
+        isConnected.value = true;
+        connectionLabel.value = '已连接';
+      } else if (message.type === 'error') {
+        console.warn('服务器错误:', message.message);
+        updateDiagnostics({ event: 'server_error', serverMessage: message.message });
+        dialogText.value = message.message || '出了点小问题，再试一次吧';
+        foxExpression.value = 'nervous';
+        foxSpeaking.value = true;
+        if (speakingTimer) clearTimeout(speakingTimer);
+        speakingTimer = setTimeout(() => { foxSpeaking.value = false; }, 3000);
+      }
+    });
+  }
+
+  // 策略：先尝试 WebSocket，3 秒内未连接成功则降级到 HTTP 轮询
+  transportMode.value = 'ws';
+  connectionLabel.value = '连接中...';
+  wsClient.value = createWebSocketClient(wsUrl);
+  setupHandlers(wsClient.value);
+
+  // 3 秒降级检测
+  const downgradeTimer = setTimeout(() => {
+    if (!isConnected.value && transportMode.value === 'ws') {
+      console.log('WebSocket 3 秒内未连接，降级到 HTTP 轮询模式');
+      transportMode.value = 'http';
+      connectionLabel.value = '连接中...';
+      // 断开 WebSocket
+      wsClient.value?.disconnect();
+      // 创建 HTTP 客户端
+      wsClient.value = createHttpVoiceClient();
+      setupHandlers(wsClient.value);
+      updateDiagnostics({ event: 'downgrade_to_http' });
     }
-  });
+  }, 3000);
 
   // 初始诊断
   updateDiagnostics({ event: 'mounted' });

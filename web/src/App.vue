@@ -8,9 +8,11 @@
         :speaking="foxSpeaking"
       />
 
-      <div v-if="dialogText" class="fox-dialog-bubble">
-        <p class="fox-dialog-text">{{ dialogText }}</p>
-      </div>
+      <transition name="bubble">
+        <div v-if="dialogText" class="fox-dialog-bubble" :key="dialogText">
+          <p class="fox-dialog-text">{{ dialogText }}</p>
+        </div>
+      </transition>
     </div>
 
     <div class="interaction-area">
@@ -176,46 +178,72 @@ defineExpose({
   align-items: center;
   justify-content: center;
   padding: 20px;
+  padding-bottom: 0;
 }
 
+/* ===== 对话气泡 ===== */
 .fox-dialog-bubble {
-  margin-top: 24px;
-  padding: 16px 24px;
-  background: rgba(255, 255, 255, 0.95);
-  border-radius: 20px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  position: relative;
+  margin-top: 20px;
+  padding: 20px 28px;
+  background: rgba(255, 255, 255, 0.96);
+  border-radius: 24px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12),
+              0 2px 8px rgba(0, 0, 0, 0.08);
   max-width: 80%;
-  animation: bubble-in 0.3s ease;
+  border: 3px solid rgba(255, 140, 66, 0.2);
+}
+
+/* 气泡小尾巴 */
+.fox-dialog-bubble::before {
+  content: '';
+  position: absolute;
+  top: -14px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 14px solid transparent;
+  border-right: 14px solid transparent;
+  border-bottom: 16px solid rgba(255, 255, 255, 0.96);
+  filter: drop-shadow(0 -2px 2px rgba(0, 0, 0, 0.04));
 }
 
 .fox-dialog-text {
-  font-size: 20px;
-  color: #333;
-  line-height: 1.6;
+  font-size: 22px;
+  font-weight: 600;
+  color: #4a3728;
+  line-height: 1.7;
   text-align: center;
+  letter-spacing: 0.5px;
 }
 
+/* ===== 交互区 ===== */
 .interaction-area {
   position: relative;
   z-index: 2;
-  padding: 16px;
+  padding: 12px 16px 24px;
   display: flex;
   justify-content: center;
 }
 
+/* ===== 连接状态 ===== */
 .connection-status {
   position: absolute;
-  top: 12px;
-  right: 12px;
+  top: 14px;
+  right: 14px;
   z-index: 10;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
-  background: rgba(255, 255, 255, 0.9);
-  border-radius: 12px;
+  padding: 6px 14px;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 20px;
   font-size: 12px;
+  font-weight: 600;
   color: #999;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
 }
 
 .connection-status.connected {
@@ -227,20 +255,30 @@ defineExpose({
   height: 8px;
   border-radius: 50%;
   background: #ccc;
+  transition: background 0.3s ease;
 }
 
 .connection-status.connected .status-dot {
   background: #4caf50;
+  box-shadow: 0 0 6px rgba(76, 175, 80, 0.6);
 }
 
-@keyframes bubble-in {
-  from {
-    opacity: 0;
-    transform: translateY(10px) scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
+/* ===== 气泡过渡动画 ===== */
+.bubble-enter-active {
+  transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.bubble-leave-active {
+  transition: all 0.2s ease;
+}
+
+.bubble-enter-from {
+  opacity: 0;
+  transform: translateY(12px) scale(0.9);
+}
+
+.bubble-leave-to {
+  opacity: 0;
+  transform: translateY(-8px) scale(0.95);
 }
 </style>

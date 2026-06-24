@@ -1,6 +1,8 @@
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const http = require('http');
+const https = require('https');
+const fs = require('fs');
 const path = require('path');
 const { initDB } = require('./db/init');
 const sessionRouter = require('./routes/session');
@@ -63,8 +65,23 @@ app.get('*', (req, res, next) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
 
-// 创建 HTTP 服务器
-const server = http.createServer(app);
+// 创建 HTTP/HTTPS 服务器（当证书存在时启用 HTTPS，麦克风需要安全上下文）
+// 证书路径可通过环境变量覆盖；默认使用项目根目录的 certs/
+const certPath = process.env.SSL_CERT_PATH || path.join(__dirname, '..', '..', 'certs', 'cert.pem');
+const keyPath = process.env.SSL_KEY_PATH || path.join(__dirname, '..', '..', 'certs', 'key.pem');
+const useHttps = process.env.USE_HTTPS !== 'false' && fs.existsSync(certPath) && fs.existsSync(keyPath);
+
+let server;
+if (useHttps) {
+  const sslOptions = {
+    cert: fs.readFileSync(certPath),
+    key: fs.readFileSync(keyPath)
+  };
+  server = https.createServer(sslOptions, app);
+  console.log('启用 HTTPS（麦克风需要安全上下文）');
+} else {
+  server = http.createServer(app);
+}
 
 // 创建 WebSocket 服务器
 const wss = new WebSocketServer({ server });
